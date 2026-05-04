@@ -22,7 +22,11 @@ export async function POST(request: Request) {
       workspaceId: body.workspaceId,
       tool: "send_sms",
       status: "success",
-      input: body.message,
+      input: JSON.stringify({
+        recipient: body.to,
+        to: body.to,
+        message: body.message,
+      }),
       output: JSON.stringify(result),
     });
 

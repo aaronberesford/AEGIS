@@ -38,8 +38,8 @@ export async function executeApproval(approvalId: string) {
   }
 
   if (approval.type === "send_sms") {
+    const phone = approval.metadata?.phone;
     try {
-      const phone = approval.metadata?.phone;
       if (!phone) {
         throw new AppError("SMS approval is missing a destination phone number.", {
           code: "SMS_MISSING_PHONE",
@@ -52,7 +52,11 @@ export async function executeApproval(approvalId: string) {
         workspaceId: approval.workspaceId,
         tool: "send_sms",
         status: "success",
-        input: approval.message,
+        input: JSON.stringify({
+          recipient: approval.recipient,
+          to: phone,
+          message: approval.message,
+        }),
         output: JSON.stringify(result),
       });
       await logSmsActivity({
@@ -72,7 +76,11 @@ export async function executeApproval(approvalId: string) {
         workspaceId: approval.workspaceId,
         tool: "send_sms",
         status: "error",
-        input: approval.message,
+        input: JSON.stringify({
+          recipient: approval.recipient,
+          to: phone,
+          message: approval.message,
+        }),
         output: "",
         error: error instanceof Error ? error.message : "SMS execution failed.",
       });
@@ -85,6 +93,7 @@ export async function executeApproval(approvalId: string) {
   }
 
   if (approval.type === "make_call") {
+    const phone = approval.metadata?.phone;
     try {
       const workspace = await workspaceById(approval.workspaceId);
       if (!workspace) {
@@ -101,7 +110,6 @@ export async function executeApproval(approvalId: string) {
         });
       }
 
-      const phone = approval.metadata?.phone;
       if (!phone) {
         throw new AppError("Call approval is missing a destination phone number.", {
           code: "CALL_MISSING_PHONE",
@@ -116,7 +124,11 @@ export async function executeApproval(approvalId: string) {
         workspaceId: approval.workspaceId,
         tool: "place_call",
         status: "success",
-        input: approval.message,
+        input: JSON.stringify({
+          recipient: approval.recipient,
+          to: phone,
+          message: approval.message,
+        }),
         output: JSON.stringify(result),
       });
       await logCallActivity({
@@ -136,7 +148,11 @@ export async function executeApproval(approvalId: string) {
         workspaceId: approval.workspaceId,
         tool: "place_call",
         status: "error",
-        input: approval.message,
+        input: JSON.stringify({
+          recipient: approval.recipient,
+          to: phone,
+          message: approval.message,
+        }),
         output: "",
         error: error instanceof Error ? error.message : "Call execution failed.",
       });

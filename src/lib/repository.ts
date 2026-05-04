@@ -227,32 +227,72 @@ function mapContact(row: Record<string, unknown>): Contact {
   };
 }
 
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.value === "string") {
+      const nested = parseJsonObject(record.value);
+      return nested ?? record;
+    }
+
+    return record;
+  } catch {
+    return null;
+  }
+}
+
 function deriveActivities(
   toolCalls: ToolCall[],
   approvals: Approval[],
   auditLogs: AuditLog[],
 ): Activity[] {
-  const fromTools = toolCalls.slice(0, 6).map((toolCall) => ({
-    id: `activity_tool_${toolCall.id}`,
-    workspaceId: toolCall.workspaceId,
-    icon:
-      toolCall.tool === "place_call"
-        ? "phone"
-        : toolCall.tool === "send_sms"
-          ? "message"
-          : "spark",
-    title:
-      toolCall.tool === "place_call"
-        ? "Outbound call queued"
-        : toolCall.tool === "send_sms"
-          ? "SMS queued"
-          : toolCall.tool,
-    subtitle: toolCall.status === "success" ? "Completed" : toolCall.error ?? "Failed",
-    timeLabel: new Date(toolCall.timestamp).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    }),
-  }));
+  const fromTools = toolCalls.slice(0, 6).map((toolCall) => {
+    const input = parseJsonObject(toolCall.input);
+    const output = parseJsonObject(toolCall.output);
+    const recipient =
+      typeof input?.recipient === "string"
+        ? input.recipient
+        : typeof input?.to === "string"
+          ? input.to
+          : typeof output?.to === "string"
+            ? output.to
+            : toolCall.tool === "place_call"
+              ? "lead"
+              : "recipient";
+    const statusLabel =
+      toolCall.status === "success"
+        ? typeof output?.status === "string"
+          ? output.status
+          : "completed"
+        : (toolCall.error ?? "Failed").replace(/^Twilio SMS failed:\s*/i, "");
+
+    return {
+      id: `activity_tool_${toolCall.id}`,
+      workspaceId: toolCall.workspaceId,
+      icon:
+        toolCall.tool === "place_call"
+          ? "phone"
+          : toolCall.tool === "send_sms"
+            ? "message"
+            : "spark",
+      title:
+        toolCall.tool === "place_call"
+          ? `Call to ${recipient}`
+          : toolCall.tool === "send_sms"
+            ? `SMS to ${recipient}`
+            : toolCall.tool,
+      subtitle: statusLabel.charAt(0).toUpperCase() + statusLabel.slice(1),
+      timeLabel: new Date(toolCall.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    };
+  });
 
   const fromApprovals = approvals
     .filter((approval) => approval.status !== "pending")
