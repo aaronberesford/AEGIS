@@ -3,6 +3,8 @@ import "server-only";
 import {
   addToolCall,
   getApproval,
+  logCallActivity,
+  logSmsActivity,
   markApprovalError,
   resolveApproval,
   workspaceById,
@@ -52,6 +54,16 @@ export async function executeApproval(approvalId: string) {
         status: "success",
         input: approval.message,
         output: JSON.stringify(result),
+      });
+      await logSmsActivity({
+        workspaceId: approval.workspaceId,
+        leadId: approval.metadata?.leadId,
+        direction: "outbound",
+        messageBody: approval.message,
+        providerMessageId:
+          result && typeof result === "object" && "sid" in result
+            ? String(result.sid)
+            : undefined,
       });
       await resolveApproval(approvalId, "approved");
       return { approval, execution: result };
@@ -106,6 +118,16 @@ export async function executeApproval(approvalId: string) {
         status: "success",
         input: approval.message,
         output: JSON.stringify(result),
+      });
+      await logCallActivity({
+        workspaceId: approval.workspaceId,
+        leadId: approval.metadata?.leadId,
+        status: "queued",
+        summary: approval.message,
+        outcome:
+          result && typeof result === "object" && "sid" in result
+            ? String(result.sid)
+            : undefined,
       });
       await resolveApproval(approvalId, "approved");
       return { approval, execution: result };

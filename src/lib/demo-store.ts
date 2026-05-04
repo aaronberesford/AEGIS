@@ -6,7 +6,9 @@ import {
   type Approval,
   type AuditLog,
   type Automation,
+  type Contact,
   type Conversation,
+  type CrmTimelineItem,
   type Lead,
   type Message,
   type Snapshot,
@@ -101,6 +103,7 @@ function seedApprovals(): Approval[] {
       scheduledFor: "Today, 11:30 AM",
       metadata: {
         phone: "+44 7712 345678",
+        leadId: "lead_1",
       },
     },
     {
@@ -161,13 +164,16 @@ function seedTasks(): TaskItem[] {
       id: "task_1",
       workspaceId: "ws_forklift",
       title: "Review missed-call automation draft",
+      description: "Check the copy before enabling the SMS fallback.",
       dueLabel: "Today, 09:45",
       status: "today",
+      linkedLeadId: "lead_1",
     },
     {
       id: "task_2",
       workspaceId: "ws_forklift",
       title: "Summarise CRM follow-ups before 12:00",
+      description: "Prepare a quick outbound queue.",
       dueLabel: "Today, 11:00",
       status: "scheduled",
     },
@@ -175,8 +181,48 @@ function seedTasks(): TaskItem[] {
       id: "task_3",
       workspaceId: "ws_forklift",
       title: "Confirm quote callback window for John Smith",
+      description: "Blocked until approval is given.",
       dueLabel: "Blocked by approval",
       status: "blocked",
+      linkedLeadId: "lead_1",
+    },
+  ];
+}
+
+function seedContacts(): Contact[] {
+  return [
+    {
+      id: "contact_1",
+      workspaceId: "ws_forklift",
+      name: "John Smith",
+      phone: "+44 7712 345678",
+      email: "john@northline.co.uk",
+      company: "Northline Warehousing",
+      status: "Quote sent",
+      notes: "Prefers calls after 10am.",
+      lastContactedAt: "Today, 09:15",
+    },
+    {
+      id: "contact_2",
+      workspaceId: "ws_forklift",
+      name: "James Walker",
+      phone: "+44 7700 100200",
+      email: "james@metro-logistics.co.uk",
+      company: "Metro Logistics",
+      status: "Hot lead",
+      notes: "Waiting on service contract pricing.",
+      lastContactedAt: "Today, 08:42",
+    },
+    {
+      id: "contact_3",
+      workspaceId: "ws_hamper",
+      name: "Hannah Reed",
+      phone: "+44 7700 500900",
+      email: "hannah@northbrook-estates.co.uk",
+      company: "Northbrook Estates",
+      status: "Proposal requested",
+      notes: "Corporate gifting opportunity.",
+      lastContactedAt: "Yesterday, 16:20",
     },
   ];
 }
@@ -186,35 +232,85 @@ function seedLeads(): Lead[] {
     {
       id: "lead_1",
       workspaceId: "ws_forklift",
+      contactId: "contact_1",
       name: "John Smith",
       company: "Northline Warehousing",
       phone: "+44 7712 345678",
       email: "john@northline.co.uk",
+      source: "Inbound call",
       stage: "Quote sent",
+      estimatedValue: 4200,
+      nextFollowUpAt: "Tomorrow, 10:00",
+      notes: "Needs quote follow-up for 3-ton fleet package.",
       lastTouch: "2 days ago",
       optOut: false,
     },
     {
       id: "lead_2",
       workspaceId: "ws_forklift",
+      contactId: "contact_2",
       name: "James Walker",
       company: "Metro Logistics",
       phone: "+44 7700 100200",
       email: "james@metro-logistics.co.uk",
+      source: "Website form",
       stage: "Hot lead",
+      estimatedValue: 9800,
+      nextFollowUpAt: "Today, 15:00",
+      notes: "Requested service contract pricing.",
       lastTouch: "Today",
       optOut: false,
     },
     {
       id: "lead_3",
       workspaceId: "ws_hamper",
+      contactId: "contact_3",
       name: "Hannah Reed",
       company: "Northbrook Estates",
       phone: "+44 7700 500900",
       email: "hannah@northbrook-estates.co.uk",
+      source: "Referral",
       stage: "Proposal requested",
+      estimatedValue: 2300,
+      nextFollowUpAt: "Friday, 11:00",
+      notes: "Corporate hamper proposal for estate agency onboarding.",
       lastTouch: "Yesterday",
       optOut: false,
+    },
+  ];
+}
+
+function seedCrmTimeline(): CrmTimelineItem[] {
+  return [
+    {
+      id: "timeline_1",
+      workspaceId: "ws_forklift",
+      leadId: "lead_1",
+      contactId: "contact_1",
+      type: "sms",
+      title: "SMS sent",
+      detail: "Missed-call follow-up sent to John Smith.",
+      timestamp: "09:15 AM",
+    },
+    {
+      id: "timeline_2",
+      workspaceId: "ws_forklift",
+      leadId: "lead_1",
+      contactId: "contact_1",
+      type: "call",
+      title: "Call scheduled",
+      detail: "Callback approval drafted for John Smith.",
+      timestamp: "09:30 AM",
+    },
+    {
+      id: "timeline_3",
+      workspaceId: "ws_forklift",
+      leadId: "lead_2",
+      contactId: "contact_2",
+      type: "task",
+      title: "Task created",
+      detail: "Prepare pricing follow-up for Metro Logistics.",
+      timestamp: "08:42 AM",
     },
   ];
 }
@@ -330,8 +426,10 @@ function createSnapshot(): Snapshot {
     workspaces: seedWorkspaces(),
     approvals: seedApprovals(),
     activities: seedActivities(),
+    contacts: seedContacts(),
     tasks: seedTasks(),
     leads: seedLeads(),
+    crmTimeline: seedCrmTimeline(),
     automations: seedAutomations(),
     conversations: seedConversations(),
     auditLogs: [],
@@ -443,6 +541,18 @@ export function addLead(lead: Lead) {
   return lead;
 }
 
+export function addContact(contact: Contact) {
+  const snapshot = state();
+  snapshot.contacts.unshift(contact);
+  return contact;
+}
+
+export function addCrmTimelineItem(item: CrmTimelineItem) {
+  const snapshot = state();
+  snapshot.crmTimeline.unshift(item);
+  return item;
+}
+
 export function addAuditLog(entry: Omit<AuditLog, "id" | "timestamp">) {
   const snapshot = state();
   snapshot.auditLogs.unshift({
@@ -526,11 +636,16 @@ export function createGeneratedLead(
   return {
     id: id("lead"),
     workspaceId,
+    contactId: undefined,
     name,
     company: "Unassigned",
     phone,
     email: "pending@example.com",
+    source: "Manual",
     stage: "New lead",
+    estimatedValue: 0,
+    nextFollowUpAt: "Not scheduled",
+    notes: "",
     lastTouch: "Just now",
     optOut: false,
   };

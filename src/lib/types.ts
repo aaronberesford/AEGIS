@@ -56,8 +56,23 @@ export type TaskItem = {
   id: string;
   workspaceId: string;
   title: string;
+  description?: string;
   dueLabel: string;
   status: "today" | "scheduled" | "blocked" | "done";
+  linkedLeadId?: string;
+  linkedContactId?: string;
+};
+
+export type Contact = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  phone: string;
+  email: string;
+  company: string;
+  status: string;
+  notes: string;
+  lastContactedAt: string;
 };
 
 export type Lead = {
@@ -67,9 +82,25 @@ export type Lead = {
   company: string;
   phone: string;
   email: string;
+  source: string;
   stage: string;
+  estimatedValue: number;
+  nextFollowUpAt: string;
+  notes: string;
+  contactId?: string;
   lastTouch: string;
   optOut: boolean;
+};
+
+export type CrmTimelineItem = {
+  id: string;
+  workspaceId: string;
+  leadId?: string;
+  contactId?: string;
+  type: "sms" | "call" | "note" | "summary" | "task";
+  title: string;
+  detail: string;
+  timestamp: string;
 };
 
 export type Automation = {
@@ -154,8 +185,10 @@ export type Snapshot = {
   workspaces: Workspace[];
   approvals: Approval[];
   activities: Activity[];
+  contacts: Contact[];
   tasks: TaskItem[];
   leads: Lead[];
+  crmTimeline: CrmTimelineItem[];
   automations: Automation[];
   conversations: Conversation[];
   auditLogs: AuditLog[];

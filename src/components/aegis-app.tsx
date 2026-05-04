@@ -2,7 +2,7 @@
 
 import { startTransition, useMemo, useRef, useState } from "react";
 
-import { type Approval, type Snapshot } from "@/lib/types";
+import { type Approval, type Lead, type Snapshot } from "@/lib/types";
 import { cn, formatRiskTone } from "@/lib/utils";
 
 type ScreenKey =
@@ -56,6 +56,9 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
   const [lastTranscript, setLastTranscript] = useState<string | null>(null);
   const [integrationState, setIntegrationState] = useState<IntegrationState>({});
   const [editingApproval, setEditingApproval] = useState<ApprovalEditState | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [crmNote, setCrmNote] = useState("");
+  const [crmTaskTitle, setCrmTaskTitle] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -80,9 +83,17 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
   const workspaceLeads = snapshot.leads.filter(
     (lead) => lead.workspaceId === currentWorkspace.id,
   );
+  const workspaceContacts = snapshot.contacts.filter(
+    (contact) => contact.workspaceId === currentWorkspace.id,
+  );
+  const workspaceCrmTimeline = snapshot.crmTimeline.filter(
+    (item) => item.workspaceId === currentWorkspace.id,
+  );
   const workspaceAutomations = snapshot.automations.filter(
     (automation) => automation.workspaceId === currentWorkspace.id,
   );
+  const selectedLead =
+    workspaceLeads.find((lead) => lead.id === selectedLeadId) ?? workspaceLeads[0] ?? null;
 
   const quickActions = useMemo(
     () => [
@@ -383,6 +394,85 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
       message: approval.message,
       reason: approval.reason,
     });
+  }
+
+  async function addLeadNote() {
+    if (!selectedLead || !crmNote.trim()) {
+      return;
+    }
+
+    setBusy(true);
+    setLastError(null);
+    try {
+      const response = await fetch("/api/crm/notes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId: currentWorkspace.id,
+          leadId: selectedLead.id,
+          contactId: selectedLead.contactId,
+          content: crmNote.trim(),
+        }),
+      });
+      await readJson<{ ok: boolean }>(response);
+      setCrmNote("");
+      setLastInfo("CRM note added.");
+      await refreshState();
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : "Unable to add note.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createLeadTask() {
+    if (!selectedLead || !crmTaskTitle.trim()) {
+      return;
+    }
+
+    setBusy(true);
+    setLastError(null);
+    try {
+      const response = await fetch("/api/crm/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId: currentWorkspace.id,
+          title: crmTaskTitle.trim(),
+          description: `Follow-up task for ${selectedLead.name}.`,
+          leadId: selectedLead.id,
+          contactId: selectedLead.contactId,
+        }),
+      });
+      await readJson<{ task: unknown }>(response);
+      setCrmTaskTitle("");
+      setLastInfo("Follow-up task created.");
+      await refreshState();
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : "Unable to create task.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function summarizeCrm() {
+    setBusy(true);
+    setLastError(null);
+    try {
+      const response = await fetch(
+        `/api/crm/summary?workspaceId=${encodeURIComponent(currentWorkspace.id)}`,
+      );
+      const payload = await readJson<{ summary: string }>(response);
+      setLastInfo(payload.summary);
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : "Unable to summarize CRM.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -692,10 +782,22 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
 
                   {screen === "crm" && (
                     <div className="space-y-3">
+                      <button
+                        onClick={() => void summarizeCrm()}
+                        className="w-full rounded-2xl border border-[rgba(124,77,255,0.25)] bg-[rgba(124,77,255,0.12)] px-4 py-3 text-left text-sm font-semibold text-white"
+                      >
+                        Summarize recent CRM activity
+                      </button>
                       {workspaceLeads.map((lead) => (
-                        <article
+                        <button
                           key={lead.id}
-                          className="rounded-2xl border border-white/8 bg-white/[0.03] p-4"
+                          onClick={() => setSelectedLeadId(lead.id)}
+                          className={cn(
+                            "w-full rounded-2xl border bg-white/[0.03] p-4 text-left",
+                            selectedLead?.id === lead.id
+                              ? "border-[rgba(124,77,255,0.35)]"
+                              : "border-white/8",
+                          )}
                         >
                           <div className="flex items-center justify-between">
                             <h4 className="text-sm font-semibold text-white">{lead.name}</h4>
@@ -704,13 +806,40 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
                             </span>
                           </div>
                           <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                            {lead.company}
+                            {lead.company} | {lead.source}
                           </p>
                           <p className="mt-1 text-sm text-[var(--text-muted)]">
                             {lead.phone} | {lead.email}
                           </p>
-                        </article>
+                        </button>
                       ))}
+                      {selectedLead && (
+                        <CrmLeadDrawer
+                          lead={selectedLead}
+                          contactName={
+                            workspaceContacts.find(
+                              (contact) => contact.id === selectedLead.contactId,
+                            )?.name ?? selectedLead.name
+                          }
+                          timeline={workspaceCrmTimeline.filter(
+                            (item) =>
+                              item.leadId === selectedLead.id ||
+                              item.contactId === selectedLead.contactId,
+                          )}
+                          crmNote={crmNote}
+                          setCrmNote={setCrmNote}
+                          crmTaskTitle={crmTaskTitle}
+                          setCrmTaskTitle={setCrmTaskTitle}
+                          onCall={() =>
+                            void sendMessage(`Call ${selectedLead.name} and follow up on their quote.`)
+                          }
+                          onSms={() =>
+                            void sendMessage(`Send an SMS follow-up to ${selectedLead.name}.`)
+                          }
+                          onAddNote={() => void addLeadNote()}
+                          onCreateTask={() => void createLeadTask()}
+                        />
+                      )}
                     </div>
                   )}
 
@@ -1114,6 +1243,118 @@ function ShieldMark() {
           strokeWidth="2.8"
         />
       </svg>
+    </div>
+  );
+}
+
+function CrmLeadDrawer({
+  lead,
+  contactName,
+  timeline,
+  crmNote,
+  setCrmNote,
+  crmTaskTitle,
+  setCrmTaskTitle,
+  onCall,
+  onSms,
+  onAddNote,
+  onCreateTask,
+}: {
+  lead: Lead;
+  contactName: string;
+  timeline: Snapshot["crmTimeline"];
+  crmNote: string;
+  setCrmNote: (value: string) => void;
+  crmTaskTitle: string;
+  setCrmTaskTitle: (value: string) => void;
+  onCall: () => void;
+  onSms: () => void;
+  onAddNote: () => void;
+  onCreateTask: () => void;
+}) {
+  return (
+    <div className="rounded-3xl border border-[rgba(124,77,255,0.28)] bg-[rgba(18,12,37,0.9)] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-lg font-semibold text-white">{lead.name}</p>
+          <p className="mt-1 text-sm text-[var(--text-secondary)]">
+            {contactName} | {lead.company}
+          </p>
+        </div>
+        <span className="rounded-full bg-[rgba(124,77,255,0.14)] px-3 py-1 text-xs text-[var(--accent-soft)]">
+          GBP {lead.estimatedValue.toLocaleString()}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 text-sm text-[var(--text-secondary)]">
+        <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
+          <p className="font-semibold text-white">Status</p>
+          <p className="mt-1">{lead.stage}</p>
+        </div>
+        <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
+          <p className="font-semibold text-white">Next follow-up</p>
+          <p className="mt-1">{lead.nextFollowUpAt}</p>
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button
+          onClick={onCall}
+          className="rounded-full bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white"
+        >
+          Call
+        </button>
+        <button
+          onClick={onSms}
+          className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white"
+        >
+          SMS
+        </button>
+      </div>
+      <textarea
+        value={crmNote}
+        onChange={(event) => setCrmNote(event.target.value)}
+        placeholder="Add a quick note"
+        className="mt-4 min-h-24 w-full rounded-2xl border border-white/8 bg-white/[0.04] px-4 py-3 text-sm text-white outline-none"
+      />
+      <button
+        onClick={onAddNote}
+        className="mt-2 w-full rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white"
+      >
+        Add note
+      </button>
+      <input
+        value={crmTaskTitle}
+        onChange={(event) => setCrmTaskTitle(event.target.value)}
+        placeholder="Create follow-up task"
+        className="mt-4 w-full rounded-2xl border border-white/8 bg-white/[0.04] px-4 py-3 text-sm text-white outline-none"
+      />
+      <button
+        onClick={onCreateTask}
+        className="mt-2 w-full rounded-full border border-[rgba(124,77,255,0.28)] bg-[rgba(124,77,255,0.16)] px-4 py-3 text-sm font-semibold text-white"
+      >
+        Create task
+      </button>
+      <div className="mt-5">
+        <p className="text-sm font-semibold text-white">Activity timeline</p>
+        <div className="mt-3 space-y-3">
+          {timeline.length === 0 && (
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3 text-sm text-[var(--text-secondary)]">
+              No CRM activity yet.
+            </div>
+          )}
+          {timeline.map((item) => (
+            <div
+              key={item.id}
+              className="rounded-2xl border border-white/8 bg-white/[0.03] p-3"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-white">{item.title}</p>
+                <span className="text-xs text-[var(--text-muted)]">{item.timestamp}</span>
+              </div>
+              <p className="mt-1 text-sm text-[var(--text-secondary)]">{item.detail}</p>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

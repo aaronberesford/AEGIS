@@ -63,18 +63,24 @@ values
   ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111', 'owner')
 on conflict do nothing;
 
-insert into contacts (id, workspace_id, full_name, phone, email)
+insert into contacts (id, workspace_id, full_name, phone, email, status, notes, last_contacted_at)
 values
-  ('33333333-3333-3333-3333-333333333331', '22222222-2222-2222-2222-222222222221', 'John Smith', '+44 7712 345678', 'john@northline.co.uk'),
-  ('33333333-3333-3333-3333-333333333332', '22222222-2222-2222-2222-222222222221', 'James Walker', '+44 7700 100200', 'james@metro-logistics.co.uk'),
-  ('33333333-3333-3333-3333-333333333333', '22222222-2222-2222-2222-222222222222', 'Hannah Reed', '+44 7700 500900', 'hannah@northbrook-estates.co.uk')
+  ('33333333-3333-3333-3333-333333333331', '22222222-2222-2222-2222-222222222221', 'John Smith', '+44 7712 345678', 'john@northline.co.uk', 'quote sent', 'Prefers calls after 10am.', now()),
+  ('33333333-3333-3333-3333-333333333332', '22222222-2222-2222-2222-222222222221', 'James Walker', '+44 7700 100200', 'james@metro-logistics.co.uk', 'hot lead', 'Waiting on service contract pricing.', now()),
+  ('33333333-3333-3333-3333-333333333333', '22222222-2222-2222-2222-222222222222', 'Hannah Reed', '+44 7700 500900', 'hannah@northbrook-estates.co.uk', 'proposal requested', 'Corporate gifting opportunity.', now())
 on conflict (id) do nothing;
 
-insert into leads (workspace_id, contact_id, source, status, summary)
+insert into leads (workspace_id, contact_id, full_name, phone, email, source, status, summary, estimated_value, next_follow_up_at)
 values
-  ('22222222-2222-2222-2222-222222222221', '33333333-3333-3333-3333-333333333331', 'Inbound call', 'Quote sent', 'Needs quote follow-up for 3-ton fleet package'),
-  ('22222222-2222-2222-2222-222222222221', '33333333-3333-3333-3333-333333333332', 'Website form', 'Hot lead', 'Requested service contract pricing'),
-  ('22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333', 'Referral', 'Proposal requested', 'Corporate hamper proposal for estate agency onboarding')
+  ('22222222-2222-2222-2222-222222222221', '33333333-3333-3333-3333-333333333331', 'John Smith', '+44 7712 345678', 'john@northline.co.uk', 'Inbound call', 'Quote sent', 'Needs quote follow-up for 3-ton fleet package', 4200, now() + interval '1 day'),
+  ('22222222-2222-2222-2222-222222222221', '33333333-3333-3333-3333-333333333332', 'James Walker', '+44 7700 100200', 'james@metro-logistics.co.uk', 'Website form', 'Hot lead', 'Requested service contract pricing', 9800, now() + interval '6 hours'),
+  ('22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333', 'Hannah Reed', '+44 7700 500900', 'hannah@northbrook-estates.co.uk', 'Referral', 'Proposal requested', 'Corporate hamper proposal for estate agency onboarding', 2300, now() + interval '3 days')
+on conflict do nothing;
+
+insert into notes (workspace_id, lead_id, contact_id, content)
+values
+  ('22222222-2222-2222-2222-222222222221', (select id from leads where contact_id='33333333-3333-3333-3333-333333333331' limit 1), '33333333-3333-3333-3333-333333333331', 'John asked for a site survey option in the quote.'),
+  ('22222222-2222-2222-2222-222222222221', (select id from leads where contact_id='33333333-3333-3333-3333-333333333332' limit 1), '33333333-3333-3333-3333-333333333332', 'Need to send maintenance pricing before end of day.')
 on conflict do nothing;
 
 insert into conversations (id, workspace_id, title)

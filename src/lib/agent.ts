@@ -1,11 +1,17 @@
 import "server-only";
 
 import {
+  addCrmNote,
   addAuditLog,
+  createFollowUpTask,
   createGeneratedApproval,
   createGeneratedAutomation,
+  createLeadRecord,
   createScheduledTaskDraft,
+  findCrmMatches,
   findPrimaryLeadForWorkspace,
+  summarizeRecentCrmActivity,
+  updateLeadStatus,
   workspaceById,
 } from "@/lib/repository";
 import { generateAgentDecision } from "@/lib/services/openai";
@@ -38,6 +44,7 @@ async function buildHeuristicResult(
       "make_call",
       {
         phone: lead?.phone ?? "",
+        leadId: lead?.id ?? "",
       },
     );
     actionCards.push({
@@ -59,6 +66,7 @@ async function buildHeuristicResult(
       "send_sms",
       {
         phone: lead?.phone ?? "",
+        leadId: lead?.id ?? "",
       },
     );
     actionCards.push({
@@ -120,6 +128,142 @@ async function buildHeuristicResult(
   };
 }
 
+async function handleCrmToolIntent(
+  workspaceId: string,
+  messageText: string,
+): Promise<AgentResult | null> {
+  const lower = messageText.toLowerCase();
+
+  if (lower.includes("summarize crm") || lower.includes("summarise crm")) {
+    const summary = await summarizeRecentCrmActivity(workspaceId);
+    return {
+      message: summary,
+      actionCards: [
+        {
+          id: "crm_summary",
+          kind: "note",
+          title: "CRM summary ready",
+          description: "Recent CRM activity has been summarized.",
+        },
+      ],
+    };
+  }
+
+  if (lower.startsWith("find ") || lower.startsWith("search ")) {
+    const query = messageText.replace(/^(find|search)\s+/i, "").trim();
+    const matches = await findCrmMatches(workspaceId, query);
+    return {
+      message: `Found ${matches.contacts.length} contacts and ${matches.leads.length} leads for "${query}".`,
+      actionCards: [
+        {
+          id: "crm_search",
+          kind: "note",
+          title: "CRM search",
+          description: `${matches.contacts.length} contacts, ${matches.leads.length} leads`,
+        },
+      ],
+    };
+  }
+
+  if (lower.startsWith("create lead")) {
+    const lead = await createLeadRecord({
+      workspaceId,
+      name: "New Lead",
+      phone: "+44 7000 000000",
+      email: "pending@example.com",
+      source: "AEGIS chat",
+      status: "New lead",
+    });
+    return {
+      message: `${lead.name} was added to CRM and is ready for follow-up.`,
+      actionCards: [
+        {
+          id: lead.id,
+          kind: "note",
+          title: "Lead created",
+          description: lead.name,
+        },
+      ],
+    };
+  }
+
+  if (lower.includes("update lead status")) {
+    const lead = await findPrimaryLeadForWorkspace(workspaceId);
+    if (!lead) {
+      return null;
+    }
+    const updated = await updateLeadStatus({
+      workspaceId,
+      leadId: lead.id,
+      status: "Follow-up scheduled",
+    });
+    return {
+      message: `${updated.name} is now marked as ${updated.stage}.`,
+      actionCards: [
+        {
+          id: updated.id,
+          kind: "note",
+          title: "Lead updated",
+          description: updated.stage,
+        },
+      ],
+    };
+  }
+
+  if (lower.startsWith("add note")) {
+    const lead = await findPrimaryLeadForWorkspace(workspaceId);
+    if (!lead) {
+      return null;
+    }
+    const content = messageText.replace(/^add note\s*/i, "").trim() || "Follow-up note added from chat.";
+    await addCrmNote({
+      workspaceId,
+      leadId: lead.id,
+      contactId: lead.contactId,
+      content,
+    });
+    return {
+      message: `Note saved against ${lead.name}.`,
+      actionCards: [
+        {
+          id: `note_${lead.id}`,
+          kind: "note",
+          title: "Note added",
+          description: content,
+        },
+      ],
+    };
+  }
+
+  if (lower.startsWith("create task") || lower.includes("follow-up task")) {
+    const lead = await findPrimaryLeadForWorkspace(workspaceId);
+    if (!lead) {
+      return null;
+    }
+    const task = await createFollowUpTask({
+      workspaceId,
+      title: `Follow up ${lead.name}`,
+      description: "Follow-up task created from AEGIS chat.",
+      dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      leadId: lead.id,
+      contactId: lead.contactId,
+    });
+    return {
+      message: `Follow-up task created for ${lead.name}.`,
+      actionCards: [
+        {
+          id: task.id,
+          kind: "task",
+          title: task.title,
+          description: task.dueLabel,
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
 function mapDecisionToResult(
   workspaceId: string,
   messageText: string,
@@ -157,6 +301,7 @@ function mapDecisionToResult(
         decision.intent === "send_sms" ? "send_sms" : "make_call",
         {
           phone: lead?.phone ?? "",
+          leadId: lead?.id ?? "",
         },
       ),
     }));
@@ -222,6 +367,19 @@ export async function runAegisAgent(input: {
 
   if (!workspace) {
     throw new Error("Workspace not found");
+  }
+
+  const crmToolResult = await handleCrmToolIntent(workspace.id, input.message);
+  if (crmToolResult) {
+    await addAuditLog({
+      workspaceId: workspace.id,
+      userId: input.userId,
+      action: "agent_crm_tool",
+      input: input.message,
+      output: crmToolResult.message,
+      approvalStatus: crmToolResult.pendingApproval ? "pending" : "not_required",
+    });
+    return crmToolResult;
   }
 
   const decision = await generateAgentDecision({
