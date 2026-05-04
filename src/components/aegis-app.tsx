@@ -351,7 +351,10 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({
+          provider,
+          workspaceId: currentWorkspace.id,
+        }),
       });
 
       const payload = await readJson<{ detail: string }>(response);

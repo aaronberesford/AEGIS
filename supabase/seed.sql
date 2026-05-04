@@ -76,3 +76,43 @@ values
   ('22222222-2222-2222-2222-222222222221', '33333333-3333-3333-3333-333333333332', 'Website form', 'Hot lead', 'Requested service contract pricing'),
   ('22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333', 'Referral', 'Proposal requested', 'Corporate hamper proposal for estate agency onboarding')
 on conflict do nothing;
+
+insert into conversations (id, workspace_id, title)
+values
+  ('44444444-4444-4444-4444-444444444441', '22222222-2222-2222-2222-222222222221', 'Daily command feed'),
+  ('44444444-4444-4444-4444-444444444442', '22222222-2222-2222-2222-222222222222', 'Yorkshire Hamper Co. brief')
+on conflict (id) do nothing;
+
+insert into messages (id, conversation_id, role, content)
+values
+  ('55555555-5555-5555-5555-555555555551', '44444444-4444-4444-4444-444444444441', 'assistant', 'Morning Alex. Forklift Pro Solutions has 3 approvals pending, 4 leads waiting on follow-up, and 1 missed call that already triggered the SMS recovery flow.'),
+  ('55555555-5555-5555-5555-555555555552', '44444444-4444-4444-4444-444444444442', 'assistant', 'Yorkshire Hamper Co. has 2 corporate opportunities moving this week and no urgent issues in the queue.')
+on conflict (id) do nothing;
+
+insert into integrations (workspace_id, provider, kind, status, config)
+values
+  ('22222222-2222-2222-2222-222222222221', 'openai', 'ai', 'disconnected', '{"model":"gpt-4.1-mini"}'::jsonb),
+  ('22222222-2222-2222-2222-222222222221', 'twilio', 'telephony', 'disconnected', '{"phoneNumber":"+44 113 555 0181"}'::jsonb),
+  ('22222222-2222-2222-2222-222222222222', 'openai', 'ai', 'disconnected', '{"model":"gpt-4.1-mini"}'::jsonb),
+  ('22222222-2222-2222-2222-222222222222', 'twilio', 'telephony', 'disconnected', '{"phoneNumber":"+44 113 555 0199"}'::jsonb)
+on conflict do nothing;
+
+insert into approvals (id, workspace_id, requested_by, action_type, recipient, payload, reason, risk_level, status)
+values
+  (
+    '66666666-6666-6666-6666-666666666661',
+    '22222222-2222-2222-2222-222222222221',
+    '11111111-1111-1111-1111-111111111111',
+    'make_call',
+    'John Smith',
+    '{"title":"Call John Smith","message":"Discuss the plumbing quote and next inspection slot.","metadata":{"phone":"+44 7712 345678"},"scheduledFor":"Today, 11:30 AM"}'::jsonb,
+    'Lead asked for a call back on the last estimate.',
+    'medium',
+    'pending'
+  )
+on conflict (id) do nothing;
+
+insert into cron_jobs (workspace_id, name, schedule, task_type, payload, enabled)
+values
+  ('22222222-2222-2222-2222-222222222221', 'Morning email summary', '0 9 * * 1-5', 'summarize_email_placeholder', '{}'::jsonb, false)
+on conflict do nothing;

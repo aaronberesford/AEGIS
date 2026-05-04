@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { addAuditLog, setWorkspace } from "@/lib/demo-store";
+import { cookies } from "next/headers";
+
+import { addAuditLog, getSnapshot } from "@/lib/repository";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as { workspaceId?: string };
@@ -9,7 +11,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "workspaceId is required" }, { status: 400 });
   }
 
-  addAuditLog({
+  await addAuditLog({
     workspaceId: body.workspaceId,
     userId: "user_alex",
     action: "workspace_switch",
@@ -18,5 +20,11 @@ export async function POST(request: Request) {
     approvalStatus: "not_required",
   });
 
-  return NextResponse.json(setWorkspace(body.workspaceId));
+  (await cookies()).set("aegis_workspace_id", body.workspaceId, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+  });
+
+  return NextResponse.json(await getSnapshot(body.workspaceId));
 }

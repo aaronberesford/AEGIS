@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { addAuditLog, getApproval, resolveApproval, updateApproval } from "@/lib/demo-store";
+import { addAuditLog, getApproval, resolveApproval, updateApproval } from "@/lib/repository";
 import { executeApproval } from "@/lib/approvals";
 import { toErrorResponse } from "@/lib/errors";
 
@@ -23,7 +23,7 @@ export async function POST(
     }
 
     if (body.decision === "edit") {
-      const approval = updateApproval(id, {
+      const approval = await updateApproval(id, {
         recipient: body.recipient,
         message: body.message,
         reason: body.reason,
@@ -34,7 +34,7 @@ export async function POST(
         return NextResponse.json({ error: "Approval not found" }, { status: 404 });
       }
 
-      addAuditLog({
+      await addAuditLog({
         workspaceId: approval.workspaceId,
         userId: "user_alex",
         action: "approval_edit",
@@ -47,13 +47,13 @@ export async function POST(
     }
 
     if (body.decision === "cancelled") {
-      const approval = resolveApproval(id, "cancelled");
+      const approval = await resolveApproval(id, "cancelled");
 
       if (!approval) {
         return NextResponse.json({ error: "Approval not found" }, { status: 404 });
       }
 
-      addAuditLog({
+      await addAuditLog({
         workspaceId: approval.workspaceId,
         userId: "user_alex",
         action: "approval_cancelled",
@@ -65,7 +65,7 @@ export async function POST(
       return NextResponse.json({ approval });
     }
 
-    const approval = getApproval(id);
+    const approval = await getApproval(id);
 
     if (!approval) {
       return NextResponse.json({ error: "Approval not found" }, { status: 404 });
@@ -73,7 +73,7 @@ export async function POST(
 
     const execution = await executeApproval(id);
 
-    addAuditLog({
+    await addAuditLog({
       workspaceId: approval.workspaceId,
       userId: "user_alex",
       action: "approval_approved",

@@ -1,11 +1,12 @@
 import "server-only";
 
 import {
+  addToolCall,
   getApproval,
   markApprovalError,
   resolveApproval,
   workspaceById,
-} from "@/lib/demo-store";
+} from "@/lib/repository";
 import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
 import { placeTwilioCall, sendTwilioSms } from "@/lib/services/twilio";
@@ -25,7 +26,7 @@ function isWithinBusinessHours(value: string) {
 }
 
 export async function executeApproval(approvalId: string) {
-  const approval = getApproval(approvalId);
+  const approval = await getApproval(approvalId);
 
   if (!approval) {
     throw new AppError("Approval not found.", {
@@ -45,10 +46,25 @@ export async function executeApproval(approvalId: string) {
       }
 
       const result = await sendTwilioSms(phone, approval.message);
-      resolveApproval(approvalId, "approved");
+      await addToolCall({
+        workspaceId: approval.workspaceId,
+        tool: "send_sms",
+        status: "success",
+        input: approval.message,
+        output: JSON.stringify(result),
+      });
+      await resolveApproval(approvalId, "approved");
       return { approval, execution: result };
     } catch (error) {
-      markApprovalError(
+      await addToolCall({
+        workspaceId: approval.workspaceId,
+        tool: "send_sms",
+        status: "error",
+        input: approval.message,
+        output: "",
+        error: error instanceof Error ? error.message : "SMS execution failed.",
+      });
+      await markApprovalError(
         approvalId,
         error instanceof Error ? error.message : "SMS execution failed.",
       );
@@ -58,7 +74,7 @@ export async function executeApproval(approvalId: string) {
 
   if (approval.type === "make_call") {
     try {
-      const workspace = workspaceById(approval.workspaceId);
+      const workspace = await workspaceById(approval.workspaceId);
       if (!workspace) {
         throw new AppError("Workspace not found for this approval.", {
           code: "WORKSPACE_NOT_FOUND",
@@ -84,10 +100,25 @@ export async function executeApproval(approvalId: string) {
       const script = encodeURIComponent(approval.message);
       const twimlUrl = `${env().appUrl}/api/twilio/voice-script?script=${script}`;
       const result = await placeTwilioCall(phone, twimlUrl);
-      resolveApproval(approvalId, "approved");
+      await addToolCall({
+        workspaceId: approval.workspaceId,
+        tool: "place_call",
+        status: "success",
+        input: approval.message,
+        output: JSON.stringify(result),
+      });
+      await resolveApproval(approvalId, "approved");
       return { approval, execution: result };
     } catch (error) {
-      markApprovalError(
+      await addToolCall({
+        workspaceId: approval.workspaceId,
+        tool: "place_call",
+        status: "error",
+        input: approval.message,
+        output: "",
+        error: error instanceof Error ? error.message : "Call execution failed.",
+      });
+      await markApprovalError(
         approvalId,
         error instanceof Error ? error.message : "Call execution failed.",
       );
@@ -95,7 +126,7 @@ export async function executeApproval(approvalId: string) {
     }
   }
 
-  markApprovalError(
+  await markApprovalError(
     approvalId,
     "This approval type is not executable yet in Phase 2.",
   );

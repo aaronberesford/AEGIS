@@ -10,8 +10,11 @@ import {
   type Lead,
   type Message,
   type Snapshot,
+  type ScheduledJob,
   type TaskItem,
+  type ToolCall,
   type Workspace,
+  type IntegrationSetting,
 } from "@/lib/types";
 
 declare global {
@@ -274,6 +277,48 @@ function seedConversations(): Conversation[] {
   ];
 }
 
+function seedToolCalls(): ToolCall[] {
+  return [];
+}
+
+function seedIntegrationSettings(): IntegrationSetting[] {
+  return [
+    {
+      id: "integration_openai",
+      workspaceId: "ws_forklift",
+      provider: "openai",
+      kind: "ai",
+      status: "demo",
+      config: {
+        model: "gpt-4.1-mini",
+      },
+    },
+    {
+      id: "integration_twilio",
+      workspaceId: "ws_forklift",
+      provider: "twilio",
+      kind: "telephony",
+      status: "demo",
+      config: {
+        phoneNumber: "+44 113 555 0181",
+      },
+    },
+  ];
+}
+
+function seedScheduledJobs(): ScheduledJob[] {
+  return [
+    {
+      id: "job_1",
+      workspaceId: "ws_forklift",
+      name: "Morning email summary",
+      schedule: "0 9 * * 1-5",
+      taskType: "summarize_email_placeholder",
+      enabled: false,
+    },
+  ];
+}
+
 function createSnapshot(): Snapshot {
   return {
     user: {
@@ -290,6 +335,9 @@ function createSnapshot(): Snapshot {
     automations: seedAutomations(),
     conversations: seedConversations(),
     auditLogs: [],
+    toolCalls: seedToolCalls(),
+    integrationSettings: seedIntegrationSettings(),
+    scheduledJobs: seedScheduledJobs(),
   };
 }
 
@@ -301,8 +349,12 @@ function state(): Snapshot {
   return globalThis.__aegisSnapshot;
 }
 
-export function getSnapshot() {
-  return structuredClone(state());
+export function getSnapshot(currentWorkspaceId?: string) {
+  const snapshot = structuredClone(state());
+  if (currentWorkspaceId) {
+    snapshot.currentWorkspaceId = currentWorkspaceId;
+  }
+  return snapshot;
 }
 
 export function setWorkspace(workspaceId: string) {
@@ -396,6 +448,15 @@ export function addAuditLog(entry: Omit<AuditLog, "id" | "timestamp">) {
   snapshot.auditLogs.unshift({
     ...entry,
     id: id("audit"),
+    timestamp: nowIso(),
+  });
+}
+
+export function addToolCall(entry: Omit<ToolCall, "id" | "timestamp">) {
+  const snapshot = state();
+  snapshot.toolCalls.unshift({
+    ...entry,
+    id: id("tool"),
     timestamp: nowIso(),
   });
 }

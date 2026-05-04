@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 
 import {
   addAuditLog,
+  addAutomationDraft,
   createGeneratedAutomation,
-  addAutomation,
-} from "@/lib/demo-store";
+} from "@/lib/repository";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as {
@@ -21,8 +21,8 @@ export async function POST(request: Request) {
     "Create task",
   ]);
 
-  addAutomation(automation);
-  addAuditLog({
+  await addAutomationDraft(automation);
+  await addAuditLog({
     workspaceId: body.workspaceId,
     userId: "user_alex",
     action: "create_automation_draft",

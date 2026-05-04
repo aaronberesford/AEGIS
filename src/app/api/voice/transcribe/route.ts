@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { addAuditLog } from "@/lib/demo-store";
 import { processAgentTurn } from "@/lib/agent-runtime";
 import { toErrorResponse } from "@/lib/errors";
+import { addAuditLog } from "@/lib/repository";
 import { transcribeAudio } from "@/lib/services/openai";
 
 export async function POST(request: Request) {
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
       (await transcribeAudio(audio)) ??
       "Call this lead and follow up on their quote.";
 
-    addAuditLog({
+    await addAuditLog({
       workspaceId,
       userId,
       action: "voice_transcription",

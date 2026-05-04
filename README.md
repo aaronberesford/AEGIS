@@ -1,6 +1,9 @@
 # AEGIS
 
-Mobile-first AI operations command app built with Next.js. The current MVP is wired for a local demo first, while keeping all OpenAI and Twilio calls on the server and enforcing approval gates for risky actions.
+Mobile-first AI operations command app built with Next.js. The app supports two storage modes:
+
+- `DEMO_MODE=true`: in-memory demo repository
+- `DEMO_MODE=false`: real Supabase/Postgres persistence through a server-only repository layer
 
 ## What is included
 
@@ -14,6 +17,7 @@ Mobile-first AI operations command app built with Next.js. The current MVP is wi
 - Twilio-ready SMS and outbound call routes
 - CRM, tasks, automations, settings, and audit log scaffolding
 - Supabase/Postgres SQL migration and seed files
+- Repository switcher for demo memory vs real Supabase persistence
 - Demo mode so the app runs locally without live API keys
 
 ## Stack
@@ -42,29 +46,44 @@ npm run dev
 
 5. Open [http://localhost:3000](http://localhost:3000).
 
-## Live integrations
+## Supabase persistence setup
 
-When you are ready to connect real services:
+When you are ready to persist real data:
 
 1. Set `DEMO_MODE=false`
-2. Add `OPENAI_API_KEY`
-3. Add `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER`
-4. Point `NEXT_PUBLIC_APP_URL` to the public app URL for Twilio callbacks
-5. Apply the SQL in [supabase/migrations/20260504160000_init_aegis.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504160000_init_aegis.sql)
-6. Run [supabase/seed.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/seed.sql)
+2. Add `SUPABASE_URL`
+3. Add `SUPABASE_SERVICE_ROLE_KEY`
+4. Apply both migrations:
+   [20260504160000_init_aegis.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504160000_init_aegis.sql)
+   [20260504190000_phase3_persistence.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504190000_phase3_persistence.sql)
+5. Run [supabase/seed.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/seed.sql)
+6. Restart the app
+
+If Supabase is not configured while `DEMO_MODE=false`, the server returns a clear configuration error instead of falling back silently.
+
+## Live integrations
+
+After Supabase is configured, connect the live services:
+
+1. Add `OPENAI_API_KEY`
+2. Add `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER`
+3. Point `NEXT_PUBLIC_APP_URL` to the public app URL for Twilio callbacks
 
 ## Important implementation notes
 
 - Secrets never touch the browser. OpenAI and Twilio are called only from server routes.
+- The Supabase service role key is used only in server-only modules and is never exposed to the browser.
 - Approval is required before SMS, email, outbound calls, website updates, posting online, or bulk CRM edits.
 - Demo mode returns safe placeholder responses so the UI can be exercised without spending API credits.
-- The current data layer uses an in-memory demo store for local operation. The SQL schema is ready for swapping to a real Postgres/Supabase repository next.
+- When `DEMO_MODE=false`, workspaces, conversations, messages, approvals, audit logs, tool calls, integration settings, and scheduled job placeholders are persisted in Supabase.
 
 ## Key files
 
 - App shell: [src/components/aegis-app.tsx](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/components/aegis-app.tsx)
 - Agent orchestration: [src/lib/agent.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/agent.ts)
+- Repository switcher: [src/lib/repository.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/repository.ts)
 - Demo state layer: [src/lib/demo-store.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/demo-store.ts)
+- Supabase admin client: [src/lib/supabase-server.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/supabase-server.ts)
 - OpenAI service wrapper: [src/lib/services/openai.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/services/openai.ts)
 - Twilio service wrapper: [src/lib/services/twilio.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/services/twilio.ts)
-- Database schema: [supabase/migrations/20260504160000_init_aegis.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504160000_init_aegis.sql)
+- Database schema: [supabase/migrations/20260504160000_init_aegis.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504160000_init_aegis.sql) and [supabase/migrations/20260504190000_phase3_persistence.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504190000_phase3_persistence.sql)

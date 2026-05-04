@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { addActivity, addAuditLog } from "@/lib/demo-store";
 import { env } from "@/lib/env";
 import { toErrorResponse } from "@/lib/errors";
+import { addAuditLog, addToolCall } from "@/lib/repository";
 import { placeTwilioCall } from "@/lib/services/twilio";
 
 export async function POST(request: Request) {
@@ -19,16 +19,15 @@ export async function POST(request: Request) {
     const twimlUrl = `${env().appUrl}/api/twilio/voice-script`;
     const result = await placeTwilioCall(body.to, twimlUrl);
 
-    addActivity({
-      id: `activity_${Date.now()}`,
+    await addToolCall({
       workspaceId: body.workspaceId,
-      icon: "phone",
-      title: `Outbound call queued`,
-      subtitle: body.to,
-      timeLabel: "Just now",
+      tool: "place_call",
+      status: "success",
+      input: body.to,
+      output: JSON.stringify(result),
     });
 
-    addAuditLog({
+    await addAuditLog({
       workspaceId: body.workspaceId,
       userId: "user_alex",
       action: "place_call",

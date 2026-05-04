@@ -115,6 +115,35 @@ export type AuditLog = {
   error?: string;
 };
 
+export type ToolCall = {
+  id: string;
+  workspaceId: string;
+  tool: string;
+  status: "success" | "error";
+  input: string;
+  output: string;
+  timestamp: string;
+  error?: string;
+};
+
+export type IntegrationSetting = {
+  id: string;
+  workspaceId: string;
+  provider: string;
+  kind: string;
+  status: string;
+  config: Record<string, string | number | boolean | null>;
+};
+
+export type ScheduledJob = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  schedule: string;
+  taskType: string;
+  enabled: boolean;
+};
+
 export type Snapshot = {
   user: {
     id: string;
@@ -130,6 +159,9 @@ export type Snapshot = {
   automations: Automation[];
   conversations: Conversation[];
   auditLogs: AuditLog[];
+  toolCalls: ToolCall[];
+  integrationSettings: IntegrationSetting[];
+  scheduledJobs: ScheduledJob[];
 };
 
 export type AgentResult = {

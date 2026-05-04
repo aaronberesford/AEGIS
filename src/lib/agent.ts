@@ -1,31 +1,26 @@
 import "server-only";
 
 import {
-  addActivity,
   addAuditLog,
   createGeneratedApproval,
   createGeneratedAutomation,
-  createGeneratedTask,
-  getSnapshot,
+  createScheduledTaskDraft,
+  findPrimaryLeadForWorkspace,
   workspaceById,
-} from "@/lib/demo-store";
+} from "@/lib/repository";
 import { generateAgentDecision } from "@/lib/services/openai";
 import { type AgentResult, type Lead } from "@/lib/types";
 
-function currentLeadForWorkspace(workspaceId: string): Lead | null {
-  return (
-    getSnapshot().leads.find(
-      (lead) => lead.workspaceId === workspaceId && !lead.optOut,
-    ) ?? null
-  );
+async function currentLeadForWorkspace(workspaceId: string): Promise<Lead | null> {
+  return findPrimaryLeadForWorkspace(workspaceId);
 }
 
-function buildHeuristicResult(
+async function buildHeuristicResult(
   workspaceId: string,
   messageText: string,
-): AgentResult {
+): Promise<AgentResult> {
   const lower = messageText.toLowerCase();
-  const lead = currentLeadForWorkspace(workspaceId);
+  const lead = await currentLeadForWorkspace(workspaceId);
   const actionCards: AgentResult["actionCards"] = [];
   let pendingApproval: AgentResult["pendingApproval"];
   let draftAutomation: AgentResult["draftAutomation"];
@@ -95,20 +90,11 @@ function buildHeuristicResult(
     message =
       "I drafted the missed-call automation and kept it disabled until you approve the workflow.";
   } else if (lower.includes("schedule") || lower.includes("weekday")) {
-    const task = createGeneratedTask(
+    const task = await createScheduledTaskDraft(
       workspaceId,
       "Weekday morning email summary",
       "Every weekday, 09:00",
-      "scheduled",
     );
-    addActivity({
-      id: `activity_${Date.now()}`,
-      workspaceId,
-      icon: "calendar",
-      title: "Scheduled task drafted",
-      subtitle: task.title,
-      timeLabel: "Just now",
-    });
     actionCards.push({
       id: task.id,
       kind: "task",
@@ -138,14 +124,13 @@ function mapDecisionToResult(
   workspaceId: string,
   messageText: string,
   decision: Awaited<ReturnType<typeof generateAgentDecision>>,
-): AgentResult {
+): Promise<AgentResult> {
   if (!decision) {
     return buildHeuristicResult(workspaceId, messageText);
   }
 
   if (decision.intent === "send_sms" || decision.intent === "make_call") {
-    const lead = currentLeadForWorkspace(workspaceId);
-    return {
+    return currentLeadForWorkspace(workspaceId).then((lead) => ({
       message: decision.reply,
       actionCards: [
         {
@@ -169,16 +154,16 @@ function mapDecisionToResult(
             : "Follow up on the quote and offer the next step."),
         decision.reason ?? "Prepared from your latest AEGIS request.",
         decision.risk ?? "medium",
-        decision.intent,
+        decision.intent === "send_sms" ? "send_sms" : "make_call",
         {
           phone: lead?.phone ?? "",
         },
       ),
-    };
+    }));
   }
 
   if (decision.intent === "create_automation") {
-    return {
+    return Promise.resolve({
       message: decision.reply,
       actionCards: [
         {
@@ -194,25 +179,15 @@ function mapDecisionToResult(
         decision.automationTrigger ?? "Manual trigger",
         decision.automationActions ?? ["Notify user"],
       ),
-    };
+    });
   }
 
   if (decision.intent === "schedule_task") {
-    const task = createGeneratedTask(
+    return createScheduledTaskDraft(
       workspaceId,
       decision.taskTitle ?? "Scheduled AEGIS task",
       decision.taskDueLabel ?? "Scheduled soon",
-      "scheduled",
-    );
-    addActivity({
-      id: `activity_${Date.now()}`,
-      workspaceId,
-      icon: "calendar",
-      title: "Scheduled task drafted",
-      subtitle: task.title,
-      timeLabel: "Just now",
-    });
-    return {
+    ).then((task) => ({
       message: decision.reply,
       actionCards: [
         {
@@ -222,10 +197,10 @@ function mapDecisionToResult(
           description: task.dueLabel,
         },
       ],
-    };
+    }));
   }
 
-  return {
+  return Promise.resolve({
     message: decision.reply,
     actionCards: [
       {
@@ -235,7 +210,7 @@ function mapDecisionToResult(
         description: "Server-side OpenAI response generated for the active workspace.",
       },
     ],
-  };
+  });
 }
 
 export async function runAegisAgent(input: {
@@ -243,7 +218,7 @@ export async function runAegisAgent(input: {
   userId: string;
   message: string;
 }) {
-  const workspace = workspaceById(input.workspaceId);
+  const workspace = await workspaceById(input.workspaceId);
 
   if (!workspace) {
     throw new Error("Workspace not found");
@@ -253,9 +228,9 @@ export async function runAegisAgent(input: {
     workspace,
     message: input.message,
   });
-  const result = mapDecisionToResult(workspace.id, input.message, decision);
+  const result = await mapDecisionToResult(workspace.id, input.message, decision);
 
-  addAuditLog({
+  await addAuditLog({
     workspaceId: workspace.id,
     userId: input.userId,
     action: "agent_chat",

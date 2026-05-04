@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { addActivity, addAuditLog } from "@/lib/demo-store";
+import { addAuditLog, addToolCall } from "@/lib/repository";
 import { toErrorResponse } from "@/lib/errors";
 import { sendTwilioSms } from "@/lib/services/twilio";
 
@@ -18,16 +18,15 @@ export async function POST(request: Request) {
 
     const result = await sendTwilioSms(body.to, body.message);
 
-    addActivity({
-      id: `activity_${Date.now()}`,
+    await addToolCall({
       workspaceId: body.workspaceId,
-      icon: "message",
-      title: `SMS queued to ${body.to}`,
-      subtitle: body.message,
-      timeLabel: "Just now",
+      tool: "send_sms",
+      status: "success",
+      input: body.message,
+      output: JSON.stringify(result),
     });
 
-    addAuditLog({
+    await addAuditLog({
       workspaceId: body.workspaceId,
       userId: "user_alex",
       action: "send_sms",

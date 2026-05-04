@@ -1,10 +1,10 @@
 import "server-only";
 
 import {
-  appendConversationMessage,
+  appendConversationTurn,
   previewAgentAction,
   workspaceById,
-} from "@/lib/demo-store";
+} from "@/lib/repository";
 import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
 import { runAegisAgent } from "@/lib/agent";
@@ -24,7 +24,7 @@ export async function processAgentTurn(input: {
   includeSpeech?: boolean;
   transcript?: string;
 }) {
-  const workspace = workspaceById(input.workspaceId);
+  const workspace = await workspaceById(input.workspaceId);
 
   if (!workspace) {
     throw new AppError("Workspace not found.", {
@@ -39,8 +39,8 @@ export async function processAgentTurn(input: {
     message: input.message,
   });
 
-  previewAgentAction(result);
-  appendConversationMessage(
+  await previewAgentAction(result);
+  await appendConversationTurn(
     input.workspaceId,
     {
       id: `msg_${Date.now()}_user`,
