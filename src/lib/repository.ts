@@ -250,7 +250,30 @@ function deriveActivities(
   toolCalls: ToolCall[],
   approvals: Approval[],
   auditLogs: AuditLog[],
+  smsLogs: Array<Record<string, unknown>>,
 ): Activity[] {
+  const fromSmsLogs = smsLogs.slice(0, 6).map((row) => {
+    const direction = String(row.direction ?? "sms").toLowerCase();
+    const isInbound = direction === "inbound";
+    const title = isInbound ? "SMS received" : "SMS sent";
+    const detail = String(row.message_body ?? "SMS activity");
+
+    return {
+      id: `activity_sms_${String(row.id)}`,
+      workspaceId: String(row.workspace_id),
+      icon: "message" as const,
+      title,
+      subtitle: detail,
+      timeLabel: new Date(String(row.created_at ?? new Date().toISOString())).toLocaleTimeString(
+        [],
+        {
+          hour: "2-digit",
+          minute: "2-digit",
+        },
+      ),
+    };
+  });
+
   const fromTools = toolCalls.slice(0, 6).map((toolCall) => {
     const input = parseJsonObject(toolCall.input);
     const output = parseJsonObject(toolCall.output);
@@ -321,7 +344,7 @@ function deriveActivities(
     }),
   }));
 
-  return [...fromTools, ...fromApprovals, ...fromAudit].slice(0, 8) as Activity[];
+  return [...fromSmsLogs, ...fromTools, ...fromApprovals, ...fromAudit].slice(0, 8) as Activity[];
 }
 
 function deriveCrmTimeline(input: {
@@ -641,7 +664,12 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     };
   });
 
-  const activities = deriveActivities(toolCalls, approvals, auditLogs);
+  const activities = deriveActivities(
+    toolCalls,
+    approvals,
+    auditLogs,
+    (smsResponse.data ?? []) as Array<Record<string, unknown>>,
+  );
   const crmTimeline = deriveCrmTimeline({
     workspaceId: selectedWorkspaceId,
     notes: (notesResponse.data ?? []) as Array<Record<string, unknown>>,
@@ -741,6 +769,36 @@ export async function workspaceById(workspaceId: string) {
 export async function findWorkspaceByTwilioNumber(phoneNumber: string) {
   const snapshot = await getSnapshot();
   const normalize = (value: string) => value.replace(/[^\d+]/g, "");
+  const matchingIntegration = snapshot.integrationSettings.find(
+    (setting) =>
+      setting.provider === "twilio" &&
+      typeof setting.config.phoneNumber === "string" &&
+      normalize(String(setting.config.phoneNumber)) === normalize(phoneNumber),
+  );
+
+  if (matchingIntegration) {
+    return (
+      snapshot.workspaces.find(
+        (workspace) => workspace.id === matchingIntegration.workspaceId,
+      ) ?? null
+    );
+  }
+
+  if (
+    env().twilioPhoneNumber &&
+    normalize(env().twilioPhoneNumber) === normalize(phoneNumber)
+  ) {
+    const activeTwilioWorkspace = snapshot.integrationSettings.find(
+      (setting) => setting.provider === "twilio" && setting.status === "connected",
+    )?.workspaceId;
+
+    if (activeTwilioWorkspace) {
+      return (
+        snapshot.workspaces.find((workspace) => workspace.id === activeTwilioWorkspace) ?? null
+      );
+    }
+  }
+
   return (
     snapshot.workspaces.find(
       (workspace) => normalize(workspace.twilioNumber) === normalize(phoneNumber),
@@ -1497,7 +1555,7 @@ export async function upsertIntegrationSetting(input: {
   const supabase = getSupabaseAdmin();
   const existing = await supabase
     .from("integrations")
-    .select("id")
+    .select("id, config")
     .eq("workspace_id", input.workspaceId)
     .eq("provider", input.provider)
     .eq("kind", input.kind)
@@ -1514,11 +1572,18 @@ export async function upsertIntegrationSetting(input: {
   }
 
   if (existing.data?.id) {
+    const existingConfig =
+      existing.data.config && typeof existing.data.config === "object"
+        ? (existing.data.config as Record<string, string | number | boolean | null>)
+        : {};
     const update = await supabase
       .from("integrations")
       .update({
         status: input.status,
-        config: input.config ?? {},
+        config: {
+          ...existingConfig,
+          ...(input.config ?? {}),
+        },
       })
       .eq("id", existing.data.id);
 

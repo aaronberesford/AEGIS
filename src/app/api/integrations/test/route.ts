@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { env } from "@/lib/env";
 import { toErrorResponse } from "@/lib/errors";
 import { upsertIntegrationSetting } from "@/lib/repository";
 import { testOpenAiConnection } from "@/lib/services/openai";
@@ -33,9 +34,16 @@ export async function POST(request: Request) {
       provider: body.provider,
       kind: body.provider === "openai" ? "ai" : "telephony",
       status: "connected",
-      config: {
-        lastTestResult: result.detail,
-      },
+      config:
+        body.provider === "openai"
+          ? {
+              model: env().openAiModel,
+              lastTestResult: result.detail,
+            }
+          : {
+              phoneNumber: env().twilioPhoneNumber,
+              lastTestResult: result.detail,
+            },
     });
 
     return NextResponse.json(result);
