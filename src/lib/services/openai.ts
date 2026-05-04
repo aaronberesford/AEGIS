@@ -55,6 +55,30 @@ async function parseJsonResponse<T>(response: Response) {
   return (await response.json()) as T;
 }
 
+function extractResponseText(payload: {
+  output_text?: string;
+  output?: Array<{
+    type?: string;
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  }>;
+}) {
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text;
+  }
+
+  const messageTexts =
+    payload.output
+      ?.flatMap((item) => item.content ?? [])
+      .filter((item) => item.type === "output_text" && typeof item.text === "string")
+      .map((item) => item.text?.trim() ?? "")
+      .filter(Boolean) ?? [];
+
+  return messageTexts.join("\n");
+}
+
 function safeJsonParse<T>(value: string): T | null {
   try {
     return JSON.parse(value) as T;
@@ -123,8 +147,17 @@ export async function generateAgentDecision(input: {
     }),
   });
 
-  const payload = await parseJsonResponse<{ output_text?: string }>(response);
-  const parsed = safeJsonParse<AgentDecision>(payload.output_text ?? "");
+  const payload = await parseJsonResponse<{
+    output_text?: string;
+    output?: Array<{
+      type?: string;
+      content?: Array<{
+        type?: string;
+        text?: string;
+      }>;
+    }>;
+  }>(response);
+  const parsed = safeJsonParse<AgentDecision>(extractResponseText(payload));
 
   if (!parsed?.reply || !parsed.intent) {
     throw new AppError("OpenAI returned an unreadable agent payload.", {

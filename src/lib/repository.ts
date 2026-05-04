@@ -2108,7 +2108,7 @@ export function createGeneratedApproval(
   type: Approval["type"],
   metadata?: Record<string, string>,
 ) {
-  return demoStore.createGeneratedApproval(
+  const approval = demoStore.createGeneratedApproval(
     workspaceId,
     title,
     recipient,
@@ -2118,6 +2118,10 @@ export function createGeneratedApproval(
     type,
     metadata,
   );
+  return {
+    ...approval,
+    id: crypto.randomUUID(),
+  };
 }
 
 export function createGeneratedAutomation(
@@ -2133,6 +2137,7 @@ export function createGeneratedAutomation(
 ) : Automation {
   return {
     ...demoStore.createGeneratedAutomation(workspaceId, name, trigger, actions),
+    id: crypto.randomUUID(),
     description: options?.description ?? "",
     templateKey: options?.templateKey,
     enabled: options?.enabled ?? false,
