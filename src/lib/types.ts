@@ -86,6 +86,7 @@ export type Lead = {
   stage: string;
   estimatedValue: number;
   nextFollowUpAt: string;
+  nextFollowUpAtValue?: string;
   notes: string;
   contactId?: string;
   lastTouch: string;
@@ -107,10 +108,14 @@ export type Automation = {
   id: string;
   workspaceId: string;
   name: string;
+  description?: string;
+  templateKey?: string;
   trigger: string;
   actions: string[];
   enabled: boolean;
   status: "draft" | "active";
+  lastRunAt?: string;
+  lastRunAtValue?: string;
 };
 
 export type Message = {
@@ -172,7 +177,31 @@ export type ScheduledJob = {
   name: string;
   schedule: string;
   taskType: string;
+  templateKey?: string;
+  recurrence: "once" | "daily" | "weekly" | "event";
   enabled: boolean;
+  status: "pending" | "running" | "completed" | "failed";
+  nextRunAt?: string;
+  nextRunAtValue?: string;
+  lastRunAt?: string;
+  lastRunAtValue?: string;
+  lastError?: string;
+  retryCount: number;
+  maxRetries: number;
+  leadId?: string;
+  automationId?: string;
+  requiresApproval: boolean;
+};
+
+export type JobRunLog = {
+  id: string;
+  workspaceId: string;
+  jobId?: string;
+  jobName: string;
+  status: "running" | "completed" | "failed";
+  attempts: number;
+  createdAt: string;
+  detail: string;
 };
 
 export type Snapshot = {
@@ -195,6 +224,7 @@ export type Snapshot = {
   toolCalls: ToolCall[];
   integrationSettings: IntegrationSetting[];
   scheduledJobs: ScheduledJob[];
+  jobRuns: JobRunLog[];
 };
 
 export type AgentResult = {

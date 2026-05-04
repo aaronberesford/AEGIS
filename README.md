@@ -15,7 +15,7 @@ Mobile-first AI operations command app built with Next.js. The app supports two 
 - Voice record flow with server-side transcription hook and server-side TTS hook
 - Approval queue for SMS, calls, email, web, and bulk actions
 - Twilio-ready SMS and outbound call routes
-- CRM, tasks, automations, settings, and audit log scaffolding
+- CRM, follow-up tasks, scheduled jobs, automations, settings, and audit log scaffolding
 - Supabase/Postgres SQL migration and seed files
 - Repository switcher for demo memory vs real Supabase persistence
 - Demo mode so the app runs locally without live API keys
@@ -53,9 +53,11 @@ When you are ready to persist real data:
 1. Set `DEMO_MODE=false`
 2. Add `SUPABASE_URL`
 3. Add `SUPABASE_SERVICE_ROLE_KEY`
-4. Apply both migrations:
+4. Apply all migrations:
    [20260504160000_init_aegis.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504160000_init_aegis.sql)
    [20260504190000_phase3_persistence.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504190000_phase3_persistence.sql)
+   [20260504203000_phase4_crm.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504203000_phase4_crm.sql)
+   [20260504220000_phase5_automations.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504220000_phase5_automations.sql)
 5. Run [supabase/seed.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/seed.sql)
 6. Restart the app
 
@@ -75,13 +77,15 @@ After Supabase is configured, connect the live services:
 - The Supabase service role key is used only in server-only modules and is never exposed to the browser.
 - Approval is required before SMS, email, outbound calls, website updates, posting online, or bulk CRM edits.
 - Demo mode returns safe placeholder responses so the UI can be exercised without spending API credits.
-- When `DEMO_MODE=false`, workspaces, conversations, messages, approvals, audit logs, tool calls, integration settings, and scheduled job placeholders are persisted in Supabase.
+- When `DEMO_MODE=false`, workspaces, conversations, messages, approvals, audit logs, tool calls, integration settings, CRM follow-ups, automations, scheduled jobs, and run logs are persisted in Supabase.
+- The scheduled job runner is exposed through the server route `POST /api/jobs/run`, which processes due jobs, logs each run, retries failures, and keeps approval gates in place for risky actions.
 
 ## Key files
 
 - App shell: [src/components/aegis-app.tsx](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/components/aegis-app.tsx)
 - Agent orchestration: [src/lib/agent.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/agent.ts)
 - Repository switcher: [src/lib/repository.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/repository.ts)
+- Automation templates and scheduling helpers: [src/lib/automation-templates.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/automation-templates.ts)
 - Demo state layer: [src/lib/demo-store.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/demo-store.ts)
 - Supabase admin client: [src/lib/supabase-server.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/supabase-server.ts)
 - OpenAI service wrapper: [src/lib/services/openai.ts](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/src/lib/services/openai.ts)

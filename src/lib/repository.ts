@@ -1,6 +1,12 @@
 import "server-only";
 
 import * as demoStore from "@/lib/demo-store";
+import {
+  automationTemplates,
+  formatDateLabel,
+  getAutomationTemplate,
+  nextRunForRecurrence,
+} from "@/lib/automation-templates";
 import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
@@ -14,6 +20,7 @@ import {
   type Conversation,
   type CrmTimelineItem,
   type IntegrationSetting,
+  type JobRunLog,
   type Lead,
   type Message,
   type ScheduledJob,
@@ -28,6 +35,11 @@ function ensure<T>(value: T | null | undefined, message: string, code: string) {
     throw new AppError(message, { code, status: 404 });
   }
   return value;
+}
+
+function formatStamp(value: string | Date) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  return Number.isNaN(date.getTime()) ? String(value) : formatDateLabel(date);
 }
 
 function mapWorkspace(row: Record<string, unknown>): Workspace {
@@ -138,13 +150,49 @@ function mapIntegration(row: Record<string, unknown>): IntegrationSetting {
 }
 
 function mapScheduledJob(row: Record<string, unknown>): ScheduledJob {
+  const payload = (row.payload as Record<string, unknown> | null) ?? {};
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
     name: String(row.name),
     schedule: String(row.schedule),
     taskType: String(row.task_type),
+    templateKey: payload.templateKey ? String(payload.templateKey) : undefined,
+    recurrence: String(payload.recurrence ?? "once") as ScheduledJob["recurrence"],
     enabled: Boolean(row.enabled),
+    status: String(row.status ?? "pending") as ScheduledJob["status"],
+    nextRunAt: row.next_run_at ? formatStamp(String(row.next_run_at)) : undefined,
+    nextRunAtValue: row.next_run_at ? String(row.next_run_at) : undefined,
+    lastRunAt: row.last_run_at ? formatStamp(String(row.last_run_at)) : undefined,
+    lastRunAtValue: row.last_run_at ? String(row.last_run_at) : undefined,
+    lastError: row.last_error ? String(row.last_error) : undefined,
+    retryCount: Number(row.retry_count ?? 0),
+    maxRetries: Number(row.max_retries ?? 3),
+    leadId:
+      row.lead_id || payload.leadId ? String(row.lead_id ?? payload.leadId) : undefined,
+    automationId:
+      row.automation_id || payload.automationId
+        ? String(row.automation_id ?? payload.automationId)
+        : undefined,
+    requiresApproval: Boolean(payload.requiresApproval ?? false),
+  };
+}
+
+function mapJobRun(
+  row: Record<string, unknown>,
+  jobsById: Map<string, ScheduledJob>,
+): JobRunLog {
+  const jobId = row.cron_job_id ? String(row.cron_job_id) : undefined;
+  const job = jobId ? jobsById.get(jobId) : undefined;
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    jobId,
+    jobName: String(row.job_name ?? job?.name ?? "Scheduled job"),
+    status: String(row.status ?? "completed") as JobRunLog["status"],
+    attempts: Number(row.attempts ?? 0),
+    createdAt: formatStamp(String(row.created_at ?? new Date().toISOString())),
+    detail: String(row.detail ?? row.error ?? "Execution completed."),
   };
 }
 
@@ -305,6 +353,7 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     toolCallResponse,
     integrationResponse,
     cronResponse,
+    executionLogResponse,
     leadResponse,
     contactResponse,
     taskResponse,
@@ -322,6 +371,11 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     supabase.from("tool_calls").select("*").order("created_at", { ascending: false }).limit(25),
     supabase.from("integrations").select("*").order("created_at", { ascending: true }),
     supabase.from("cron_jobs").select("*").order("created_at", { ascending: false }),
+    supabase
+      .from("task_execution_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50),
     supabase.from("leads").select("*").order("created_at", { ascending: false }),
     supabase.from("contacts").select("*").order("created_at", { ascending: false }),
     supabase.from("tasks").select("*").order("created_at", { ascending: false }),
@@ -341,6 +395,7 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     toolCallResponse.error,
     integrationResponse.error,
     cronResponse.error,
+    executionLogResponse.error,
     leadResponse.error,
     contactResponse.error,
     taskResponse.error,
@@ -408,6 +463,10 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
   );
   const scheduledJobs = (cronResponse.data ?? []).map((row) =>
     mapScheduledJob(row as Record<string, unknown>),
+  );
+  const jobsById = new Map(scheduledJobs.map((job) => [job.id, job]));
+  const jobRuns = (executionLogResponse.data ?? []).map((row) =>
+    mapJobRun(row as Record<string, unknown>, jobsById),
   );
 
   const companyIds = Array.from(
@@ -481,6 +540,9 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
             day: "numeric",
           })
         : "Not scheduled",
+      nextFollowUpAtValue: leadRow.next_follow_up_at
+        ? String(leadRow.next_follow_up_at)
+        : undefined,
       notes: notesByLeadId.get(String(leadRow.id))?.join(" ") ?? String(leadRow.summary ?? ""),
       lastTouch: contact?.lastContactedAt ?? "Recent",
       optOut: false,
@@ -512,12 +574,20 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
       id: String(automationRow.id),
       workspaceId: String(automationRow.workspace_id),
       name: String(automationRow.name),
+      description: String(automationRow.description ?? ""),
+      templateKey: automationRow.template_key ? String(automationRow.template_key) : undefined,
       trigger: String(automationRow.trigger_type),
       actions: Array.isArray(automationRow.actions)
         ? automationRow.actions.map(String)
         : [],
       enabled: Boolean(automationRow.enabled),
       status: Boolean(automationRow.enabled) ? "active" : "draft",
+      lastRunAt: automationRow.last_run_at
+        ? formatStamp(String(automationRow.last_run_at))
+        : undefined,
+      lastRunAtValue: automationRow.last_run_at
+        ? String(automationRow.last_run_at)
+        : undefined,
     };
   });
 
@@ -552,6 +622,7 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     toolCalls,
     integrationSettings,
     scheduledJobs,
+    jobRuns,
   };
 }
 
@@ -684,7 +755,10 @@ export async function createLeadRecord(input: {
       source: input.source,
       stage: input.status ?? "New lead",
       estimatedValue: input.estimatedValue ?? 0,
-      nextFollowUpAt: input.nextFollowUpAt ?? "Not scheduled",
+      nextFollowUpAt: input.nextFollowUpAt
+        ? formatStamp(input.nextFollowUpAt)
+        : "Not scheduled",
+      nextFollowUpAtValue: input.nextFollowUpAt,
       company: input.company ?? "Unassigned",
     };
     demoStore.addLead(lead);
@@ -795,7 +869,8 @@ export async function updateLeadStatus(input: {
     }
     lead.stage = input.status;
     if (input.nextFollowUpAt) {
-      lead.nextFollowUpAt = input.nextFollowUpAt;
+      lead.nextFollowUpAt = formatStamp(input.nextFollowUpAt);
+      lead.nextFollowUpAtValue = input.nextFollowUpAt;
     }
     demoStore.addCrmTimelineItem({
       id: `timeline_${Math.random().toString(36).slice(2, 10)}`,
@@ -892,7 +967,7 @@ export async function createFollowUpTask(input: {
       workspaceId: input.workspaceId,
       title: input.title,
       description: input.description,
-      dueLabel: input.dueAt,
+      dueLabel: formatStamp(input.dueAt),
       status: "scheduled",
       linkedLeadId: input.leadId,
       linkedContactId: input.contactId,
@@ -906,7 +981,7 @@ export async function createFollowUpTask(input: {
       type: "task",
       title: "Task created",
       detail: input.title,
-      timestamp: input.dueAt,
+      timestamp: formatStamp(input.dueAt),
     });
     return task;
   }
@@ -937,7 +1012,7 @@ export async function createFollowUpTask(input: {
     workspaceId: input.workspaceId,
     title: input.title,
     description: input.description,
-    dueLabel: input.dueAt,
+    dueLabel: formatStamp(input.dueAt),
     status: "scheduled",
     linkedLeadId: input.leadId,
     linkedContactId: input.contactId,
@@ -1100,10 +1175,13 @@ export async function previewAgentAction(result: AgentResult) {
       id: automation.id,
       workspace_id: automation.workspaceId,
       name: automation.name,
+      description: automation.description ?? "",
+      template_key: automation.templateKey ?? null,
       trigger_type: automation.trigger,
       trigger_config: {},
       actions: automation.actions,
       enabled: automation.enabled,
+      last_run_at: automation.lastRunAtValue ?? null,
     });
 
     if (inserted.error) {
@@ -1306,8 +1384,13 @@ export async function createScheduledTaskDraft(
       name: title,
       schedule: dueLabel,
       task_type: "scheduled_task_placeholder",
-      payload: {},
+      payload: {
+        recurrence: "once",
+        requiresApproval: false,
+      },
       enabled: false,
+      status: "pending",
+      max_retries: 1,
     }),
   ]);
 
@@ -1408,6 +1491,603 @@ export async function upsertIntegrationSetting(input: {
   }
 }
 
+async function createScheduledJobRecord(input: {
+  workspaceId: string;
+  name: string;
+  schedule: string;
+  taskType: string;
+  templateKey?: string;
+  recurrence: ScheduledJob["recurrence"];
+  enabled: boolean;
+  nextRunAtValue?: string;
+  leadId?: string;
+  automationId?: string;
+  requiresApproval: boolean;
+  maxRetries?: number;
+}) {
+  const job: ScheduledJob = {
+    id: `job_${Math.random().toString(36).slice(2, 10)}`,
+    workspaceId: input.workspaceId,
+    name: input.name,
+    schedule: input.schedule,
+    taskType: input.taskType,
+    templateKey: input.templateKey,
+    recurrence: input.recurrence,
+    enabled: input.enabled,
+    status: "pending",
+    nextRunAt: input.nextRunAtValue ? formatStamp(input.nextRunAtValue) : undefined,
+    nextRunAtValue: input.nextRunAtValue,
+    retryCount: 0,
+    maxRetries: input.maxRetries ?? 3,
+    leadId: input.leadId,
+    automationId: input.automationId,
+    requiresApproval: input.requiresApproval,
+  };
+
+  if (env().demoMode) {
+    demoStore.addScheduledJob(job);
+    return job;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const inserted = await supabase
+    .from("cron_jobs")
+    .insert({
+      workspace_id: input.workspaceId,
+      name: input.name,
+      schedule: input.schedule,
+      task_type: input.taskType,
+      payload: {
+        templateKey: input.templateKey ?? null,
+        recurrence: input.recurrence,
+        leadId: input.leadId ?? null,
+        automationId: input.automationId ?? null,
+        requiresApproval: input.requiresApproval,
+      },
+      enabled: input.enabled,
+      status: "pending",
+      next_run_at: input.nextRunAtValue ?? null,
+      retry_count: 0,
+      max_retries: input.maxRetries ?? 3,
+      lead_id: input.leadId ?? null,
+      automation_id: input.automationId ?? null,
+    })
+    .select("*")
+    .single();
+
+  if (inserted.error) {
+    throw new AppError(`Unable to create scheduled job: ${inserted.error.message}`, {
+      code: "SUPABASE_CRON_INSERT_FAILED",
+      status: 500,
+    });
+  }
+
+  return mapScheduledJob(inserted.data as Record<string, unknown>);
+}
+
+async function updateScheduledJobRecord(
+  jobId: string,
+  updates: Partial<ScheduledJob>,
+) {
+  if (env().demoMode) {
+    return demoStore.updateScheduledJob(jobId, updates);
+  }
+
+  const supabase = getSupabaseAdmin();
+  const payload: Record<string, unknown> = {};
+  if (updates.templateKey !== undefined) {
+    payload.templateKey = updates.templateKey;
+  }
+  if (updates.recurrence !== undefined) {
+    payload.recurrence = updates.recurrence;
+  }
+  if (updates.leadId !== undefined) {
+    payload.leadId = updates.leadId;
+  }
+  if (updates.automationId !== undefined) {
+    payload.automationId = updates.automationId;
+  }
+  if (updates.requiresApproval !== undefined) {
+    payload.requiresApproval = updates.requiresApproval;
+  }
+
+  const response = await supabase
+    .from("cron_jobs")
+    .update({
+      name: updates.name,
+      schedule: updates.schedule,
+      task_type: updates.taskType,
+      enabled: updates.enabled,
+      status: updates.status,
+      next_run_at: updates.nextRunAtValue,
+      last_run_at: updates.lastRunAtValue,
+      last_error: updates.lastError ?? null,
+      retry_count: updates.retryCount,
+      max_retries: updates.maxRetries,
+      lead_id: updates.leadId ?? null,
+      automation_id: updates.automationId ?? null,
+      ...(Object.keys(payload).length > 0 ? { payload } : {}),
+    })
+    .eq("id", jobId)
+    .select("*")
+    .single();
+
+  if (response.error) {
+    throw new AppError(`Unable to update scheduled job: ${response.error.message}`, {
+      code: "SUPABASE_CRON_UPDATE_FAILED",
+      status: 500,
+    });
+  }
+
+  return mapScheduledJob(response.data as Record<string, unknown>);
+}
+
+async function addJobRunRecord(input: {
+  workspaceId: string;
+  jobId?: string;
+  jobName: string;
+  status: JobRunLog["status"];
+  attempts: number;
+  detail: string;
+}) {
+  const run: JobRunLog = {
+    id: `jobrun_${Math.random().toString(36).slice(2, 10)}`,
+    workspaceId: input.workspaceId,
+    jobId: input.jobId,
+    jobName: input.jobName,
+    status: input.status,
+    attempts: input.attempts,
+    createdAt: formatStamp(new Date()),
+    detail: input.detail,
+  };
+
+  if (env().demoMode) {
+    demoStore.addJobRun(run);
+    return run;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const inserted = await supabase.from("task_execution_logs").insert({
+    cron_job_id: input.jobId ?? null,
+    workspace_id: input.workspaceId,
+    status: input.status,
+    attempts: input.attempts,
+    error: input.status === "failed" ? input.detail : null,
+    job_name: input.jobName,
+    detail: input.detail,
+  });
+
+  if (inserted.error) {
+    throw new AppError(`Unable to save job run: ${inserted.error.message}`, {
+      code: "SUPABASE_JOB_RUN_INSERT_FAILED",
+      status: 500,
+    });
+  }
+
+  return run;
+}
+
+export function getAutomationTemplates() {
+  return automationTemplates;
+}
+
+export async function getOverdueFollowUps(workspaceId: string) {
+  const snapshot = await getSnapshot(workspaceId);
+  const now = Date.now();
+  return snapshot.leads.filter(
+    (lead) => lead.workspaceId === workspaceId && !!lead.nextFollowUpAtValue && new Date(lead.nextFollowUpAtValue).getTime() <= now,
+  );
+}
+
+export async function scheduleLeadFollowUp(input: {
+  workspaceId: string;
+  leadId: string;
+  dueAt: string;
+  title?: string;
+  description?: string;
+}) {
+  const snapshot = await getSnapshot(input.workspaceId);
+  const lead = ensure(
+    snapshot.leads.find((entry) => entry.id === input.leadId),
+    "Lead not found.",
+    "LEAD_NOT_FOUND",
+  );
+
+  const task = await createFollowUpTask({
+    workspaceId: input.workspaceId,
+    title: input.title ?? `Follow up ${lead.name}`,
+    description:
+      input.description ?? `AEGIS reminder to follow up ${lead.name} on their latest enquiry.`,
+    dueAt: input.dueAt,
+    leadId: lead.id,
+    contactId: lead.contactId,
+  });
+
+  await updateLeadStatus({
+    workspaceId: input.workspaceId,
+    leadId: lead.id,
+    status: "Follow-up scheduled",
+    nextFollowUpAt: input.dueAt,
+  });
+
+  const job = await createScheduledJobRecord({
+    workspaceId: input.workspaceId,
+    name: `Follow up ${lead.name}`,
+    schedule: formatStamp(input.dueAt),
+    taskType: "lead_follow_up",
+    recurrence: "once",
+    enabled: true,
+    nextRunAtValue: input.dueAt,
+    leadId: lead.id,
+    requiresApproval: true,
+    maxRetries: 3,
+  });
+
+  await addAuditLog({
+    workspaceId: input.workspaceId,
+    userId: "user_alex",
+    action: "schedule_lead_follow_up",
+    input: lead.name,
+    output: job.id,
+    approvalStatus: "not_required",
+  });
+
+  return { task, job };
+}
+
+export async function createAutomationFromTemplate(input: {
+  workspaceId: string;
+  templateKey: string;
+  enabled?: boolean;
+}) {
+  const template = ensure(
+    getAutomationTemplate(input.templateKey),
+    "Automation template not found.",
+    "AUTOMATION_TEMPLATE_NOT_FOUND",
+  );
+
+  const automation = createGeneratedAutomation(
+    input.workspaceId,
+    template.name,
+    template.trigger,
+    template.actions,
+    {
+      description: template.description,
+      templateKey: template.key,
+      enabled: input.enabled ?? false,
+    },
+  );
+  await addAutomationDraft(automation);
+
+  const nextRun = nextRunForRecurrence(template.recurrence);
+  const job = await createScheduledJobRecord({
+    workspaceId: input.workspaceId,
+    name: template.name,
+    schedule: template.defaultSchedule,
+    taskType: template.taskType,
+    templateKey: template.key,
+    recurrence: template.recurrence,
+    enabled: input.enabled ?? false,
+    nextRunAtValue: nextRun?.toISOString(),
+    automationId: automation.id,
+    requiresApproval: template.requiresApproval,
+    maxRetries: 3,
+  });
+
+  return { automation, job, template };
+}
+
+export async function toggleAutomationEnabled(automationId: string, enabled: boolean) {
+  if (env().demoMode) {
+    const automation = demoStore.updateAutomation(automationId, {
+      enabled,
+      status: enabled ? "active" : "draft",
+    });
+    if (!automation) {
+      throw new AppError("Automation not found.", {
+        code: "AUTOMATION_NOT_FOUND",
+        status: 404,
+      });
+    }
+    const relatedJobs = demoStore
+      .getSnapshot()
+      .scheduledJobs.filter((job) => job.automationId === automationId);
+    for (const job of relatedJobs) {
+      demoStore.updateScheduledJob(job.id, { enabled });
+    }
+    return automation;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const response = await supabase
+    .from("automations")
+    .update({ enabled })
+    .eq("id", automationId)
+    .select("*")
+    .single();
+
+  if (response.error) {
+    throw new AppError(`Unable to update automation: ${response.error.message}`, {
+      code: "SUPABASE_AUTOMATION_UPDATE_FAILED",
+      status: 500,
+    });
+  }
+
+  const cronUpdate = await supabase
+    .from("cron_jobs")
+    .update({ enabled })
+    .eq("automation_id", automationId);
+  if (cronUpdate.error) {
+    throw new AppError(`Unable to update automation jobs: ${cronUpdate.error.message}`, {
+      code: "SUPABASE_CRON_UPDATE_FAILED",
+      status: 500,
+    });
+  }
+
+  return {
+    id: String(response.data.id),
+    workspaceId: String(response.data.workspace_id),
+    name: String(response.data.name),
+    description: String(response.data.description ?? ""),
+    templateKey: response.data.template_key ? String(response.data.template_key) : undefined,
+    trigger: String(response.data.trigger_type),
+    actions: Array.isArray(response.data.actions) ? response.data.actions.map(String) : [],
+    enabled: Boolean(response.data.enabled),
+    status: Boolean(response.data.enabled) ? "active" : "draft",
+    lastRunAt: response.data.last_run_at
+      ? formatStamp(String(response.data.last_run_at))
+      : undefined,
+    lastRunAtValue: response.data.last_run_at ? String(response.data.last_run_at) : undefined,
+  } satisfies Automation;
+}
+
+export async function toggleScheduledJobEnabled(jobId: string, enabled: boolean) {
+  const current = (await getSnapshot()).scheduledJobs.find((job) => job.id === jobId);
+  if (!current) {
+    throw new AppError("Scheduled job not found.", {
+      code: "SCHEDULED_JOB_NOT_FOUND",
+      status: 404,
+    });
+  }
+  return updateScheduledJobRecord(jobId, { ...current, enabled });
+}
+
+function buildSalesSummary(leads: Lead[]) {
+  const totalValue = leads.reduce((sum, lead) => sum + lead.estimatedValue, 0);
+  return `${leads.length} active leads worth GBP ${totalValue.toLocaleString()}.`;
+}
+
+async function executeScheduledJob(job: ScheduledJob) {
+  const snapshot = await getSnapshot(job.workspaceId);
+  const lead = job.leadId
+    ? snapshot.leads.find((entry) => entry.id === job.leadId)
+    : snapshot.leads.find((entry) => entry.workspaceId === job.workspaceId && !entry.optOut);
+
+  if (job.taskType === "lead_follow_up") {
+    const targetLead = ensure(lead, "Lead not found for follow-up job.", "LEAD_NOT_FOUND");
+    await createFollowUpTask({
+      workspaceId: job.workspaceId,
+      title: `Follow up ${targetLead.name}`,
+      description: "Scheduled by AEGIS follow-up runner.",
+      dueAt: new Date().toISOString(),
+      leadId: targetLead.id,
+      contactId: targetLead.contactId,
+    });
+    await previewAgentAction({
+      message: "",
+      actionCards: [],
+      pendingApproval: createGeneratedApproval(
+        job.workspaceId,
+        `Send follow-up SMS to ${targetLead.name}`,
+        targetLead.name,
+        `Hi ${targetLead.name.split(" ")[0]}, just checking in on your quote and next steps.`,
+        "Scheduled lead follow-up reached its due time.",
+        "medium",
+        "send_sms",
+        {
+          phone: targetLead.phone,
+          leadId: targetLead.id,
+        },
+      ),
+    });
+    return `Created a follow-up task and drafted an approval-safe SMS for ${targetLead.name}.`;
+  }
+
+  if (job.taskType === "missed_call_follow_up") {
+    const targetLead = ensure(lead, "No lead available for missed-call follow-up.", "LEAD_NOT_FOUND");
+    await previewAgentAction({
+      message: "",
+      actionCards: [],
+      pendingApproval: createGeneratedApproval(
+        job.workspaceId,
+        `Missed-call SMS for ${targetLead.name}`,
+        targetLead.name,
+        `Hi ${targetLead.name.split(" ")[0]}, sorry we missed you. Would you like me to arrange a callback today?`,
+        "Missed-call automation runner prepared a safe SMS draft.",
+        "medium",
+        "send_sms",
+        {
+          phone: targetLead.phone,
+          leadId: targetLead.id,
+        },
+      ),
+    });
+    return `Prepared a missed-call SMS approval for ${targetLead.name}.`;
+  }
+
+  if (job.taskType === "no_reply_follow_up") {
+    const staleLead = snapshot.leads.find(
+      (entry) =>
+        entry.workspaceId === job.workspaceId &&
+        !!entry.nextFollowUpAtValue &&
+        new Date(entry.nextFollowUpAtValue).getTime() <= Date.now(),
+    );
+    if (!staleLead) {
+      return "No stale leads needed a no-reply follow-up.";
+    }
+    await previewAgentAction({
+      message: "",
+      actionCards: [],
+      pendingApproval: createGeneratedApproval(
+        job.workspaceId,
+        `No-reply follow-up for ${staleLead.name}`,
+        staleLead.name,
+        `Hi ${staleLead.name.split(" ")[0]}, just checking whether you want to move forward with the quote.`,
+        "No-reply automation prepared a follow-up draft after 2 days.",
+        "medium",
+        "send_sms",
+        {
+          phone: staleLead.phone,
+          leadId: staleLead.id,
+        },
+      ),
+    });
+    return `Prepared a no-reply follow-up draft for ${staleLead.name}.`;
+  }
+
+  if (job.taskType === "daily_crm_summary") {
+    const overdue = await getOverdueFollowUps(job.workspaceId);
+    const summary = await summarizeRecentCrmActivity(job.workspaceId);
+    const detail = `${summary} Overdue follow-ups: ${overdue.length}.`;
+    await addAuditLog({
+      workspaceId: job.workspaceId,
+      userId: "user_alex",
+      action: "daily_crm_summary",
+      input: job.name,
+      output: detail,
+      approvalStatus: "not_required",
+    });
+    return detail;
+  }
+
+  if (job.taskType === "weekly_sales_summary") {
+    const detail = buildSalesSummary(
+      snapshot.leads.filter((entry) => entry.workspaceId === job.workspaceId),
+    );
+    await addAuditLog({
+      workspaceId: job.workspaceId,
+      userId: "user_alex",
+      action: "weekly_sales_summary",
+      input: job.name,
+      output: detail,
+      approvalStatus: "not_required",
+    });
+    return detail;
+  }
+
+  return "No execution handler was needed for this scheduled job.";
+}
+
+export async function runDueScheduledJobs(input?: { workspaceId?: string; limit?: number }) {
+  const snapshot = await getSnapshot(input?.workspaceId);
+  const now = Date.now();
+  const dueJobs = snapshot.scheduledJobs
+    .filter((job) => {
+      if (input?.workspaceId && job.workspaceId !== input.workspaceId) {
+        return false;
+      }
+      return (
+        job.enabled &&
+        !!job.nextRunAtValue &&
+        new Date(job.nextRunAtValue).getTime() <= now
+      );
+    })
+    .slice(0, input?.limit ?? 10);
+
+  const results: Array<{ jobId: string; status: ScheduledJob["status"]; detail: string }> = [];
+
+  for (const job of dueJobs) {
+    const startedAt = new Date().toISOString();
+    await updateScheduledJobRecord(job.id, {
+      ...job,
+      status: "running",
+      lastError: undefined,
+    });
+
+    try {
+      const detail = await executeScheduledJob(job);
+      const nextRun =
+        job.recurrence === "daily" || job.recurrence === "weekly"
+          ? nextRunForRecurrence(job.recurrence)?.toISOString()
+          : undefined;
+      await updateScheduledJobRecord(job.id, {
+        ...job,
+        status: "completed",
+        enabled: nextRun ? job.enabled : false,
+        lastRunAt: formatStamp(startedAt),
+        lastRunAtValue: startedAt,
+        nextRunAt: nextRun ? formatStamp(nextRun) : undefined,
+        nextRunAtValue: nextRun,
+        retryCount: 0,
+        lastError: undefined,
+      });
+      await addJobRunRecord({
+        workspaceId: job.workspaceId,
+        jobId: job.id,
+        jobName: job.name,
+        status: "completed",
+        attempts: job.retryCount + 1,
+        detail,
+      });
+      if (job.automationId) {
+        await touchAutomationRun(job.automationId, startedAt);
+      }
+      results.push({ jobId: job.id, status: "completed", detail });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Scheduled job failed.";
+      const retryCount = job.retryCount + 1;
+      const canRetry = retryCount < job.maxRetries;
+      const retryAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      await updateScheduledJobRecord(job.id, {
+        ...job,
+        status: "failed",
+        enabled: canRetry,
+        retryCount,
+        lastError: message,
+        nextRunAt: canRetry ? formatStamp(retryAt) : job.nextRunAt,
+        nextRunAtValue: canRetry ? retryAt : job.nextRunAtValue,
+      });
+      await addJobRunRecord({
+        workspaceId: job.workspaceId,
+        jobId: job.id,
+        jobName: job.name,
+        status: "failed",
+        attempts: retryCount,
+        detail: message,
+      });
+      results.push({ jobId: job.id, status: "failed", detail: message });
+    }
+  }
+
+  return {
+    processed: results.length,
+    results,
+  };
+}
+
+async function touchAutomationRun(automationId: string, lastRunAtValue: string) {
+  if (env().demoMode) {
+    demoStore.updateAutomation(automationId, {
+      lastRunAt: formatStamp(lastRunAtValue),
+      lastRunAtValue,
+    });
+    return;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const response = await supabase
+    .from("automations")
+    .update({ last_run_at: lastRunAtValue })
+    .eq("id", automationId);
+
+  if (response.error) {
+    throw new AppError(`Unable to update automation run state: ${response.error.message}`, {
+      code: "SUPABASE_AUTOMATION_UPDATE_FAILED",
+      status: 500,
+    });
+  }
+}
+
 export function createGeneratedApproval(
   workspaceId: string,
   title: string,
@@ -1435,8 +2115,19 @@ export function createGeneratedAutomation(
   name: string,
   trigger: string,
   actions: string[],
-) {
-  return demoStore.createGeneratedAutomation(workspaceId, name, trigger, actions);
+  options?: {
+    description?: string;
+    templateKey?: string;
+    enabled?: boolean;
+  },
+) : Automation {
+  return {
+    ...demoStore.createGeneratedAutomation(workspaceId, name, trigger, actions),
+    description: options?.description ?? "",
+    templateKey: options?.templateKey,
+    enabled: options?.enabled ?? false,
+    status: options?.enabled ? ("active" as const) : ("draft" as const),
+  } satisfies Automation;
 }
 
 export async function addAutomationDraft(automation: Automation) {
@@ -1450,10 +2141,13 @@ export async function addAutomationDraft(automation: Automation) {
     id: automation.id,
     workspace_id: automation.workspaceId,
     name: automation.name,
+    description: automation.description ?? "",
+    template_key: automation.templateKey ?? null,
     trigger_type: automation.trigger,
     trigger_config: {},
     actions: automation.actions,
     enabled: automation.enabled,
+    last_run_at: automation.lastRunAtValue ?? null,
   });
 
   if (inserted.error) {

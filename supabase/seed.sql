@@ -118,7 +118,66 @@ values
   )
 on conflict (id) do nothing;
 
-insert into cron_jobs (workspace_id, name, schedule, task_type, payload, enabled)
+insert into automations (workspace_id, name, description, template_key, trigger_type, trigger_config, actions, enabled, last_run_at)
 values
-  ('22222222-2222-2222-2222-222222222221', 'Morning email summary', '0 9 * * 1-5', 'summarize_email_placeholder', '{}'::jsonb, false)
+  (
+    '22222222-2222-2222-2222-222222222221',
+    'Missed call follow-up',
+    'Draft an SMS, create a follow-up task, and notify the workspace owner.',
+    'missed_call_follow_up',
+    'Missed call received',
+    '{}'::jsonb,
+    '["Draft missed-call SMS for approval","Create follow-up task","Notify workspace owner"]'::jsonb,
+    true,
+    now() - interval '45 minutes'
+  )
+on conflict do nothing;
+
+insert into cron_jobs (workspace_id, name, schedule, task_type, payload, enabled, status, next_run_at, retry_count, max_retries, lead_id, automation_id)
+values
+  (
+    '22222222-2222-2222-2222-222222222221',
+    'Daily CRM summary',
+    'Every day, 09:00',
+    'daily_crm_summary',
+    '{"templateKey":"daily_crm_summary","recurrence":"daily","requiresApproval":false}'::jsonb,
+    true,
+    'pending',
+    now() + interval '1 day',
+    0,
+    3,
+    null,
+    null
+  ),
+  (
+    '22222222-2222-2222-2222-222222222221',
+    'Follow up John Smith',
+    'Tomorrow at 09:00',
+    'lead_follow_up',
+    jsonb_build_object(
+      'recurrence', 'once',
+      'leadId', (select id from leads where full_name = 'John Smith' limit 1),
+      'requiresApproval', true
+    ),
+    true,
+    'pending',
+    now() + interval '1 day',
+    0,
+    3,
+    (select id from leads where full_name = 'John Smith' limit 1),
+    (select id from automations where template_key = 'missed_call_follow_up' limit 1)
+  )
+on conflict do nothing;
+
+insert into task_execution_logs (cron_job_id, workspace_id, status, attempts, job_name, detail, created_at)
+values
+  (
+    (select id from cron_jobs where name = 'Follow up John Smith' limit 1),
+    '22222222-2222-2222-2222-222222222221',
+    'completed',
+    1,
+    'Follow up John Smith',
+    'Created a follow-up task and queued an approval-safe outreach draft.',
+    now() - interval '1 day'
+  )
 on conflict do nothing;

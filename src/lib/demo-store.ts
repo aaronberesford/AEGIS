@@ -9,6 +9,7 @@ import {
   type Contact,
   type Conversation,
   type CrmTimelineItem,
+  type JobRunLog,
   type Lead,
   type Message,
   type Snapshot,
@@ -241,6 +242,7 @@ function seedLeads(): Lead[] {
       stage: "Quote sent",
       estimatedValue: 4200,
       nextFollowUpAt: "Tomorrow, 10:00",
+      nextFollowUpAtValue: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       notes: "Needs quote follow-up for 3-ton fleet package.",
       lastTouch: "2 days ago",
       optOut: false,
@@ -257,6 +259,7 @@ function seedLeads(): Lead[] {
       stage: "Hot lead",
       estimatedValue: 9800,
       nextFollowUpAt: "Today, 15:00",
+      nextFollowUpAtValue: new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString(),
       notes: "Requested service contract pricing.",
       lastTouch: "Today",
       optOut: false,
@@ -273,6 +276,7 @@ function seedLeads(): Lead[] {
       stage: "Proposal requested",
       estimatedValue: 2300,
       nextFollowUpAt: "Friday, 11:00",
+      nextFollowUpAtValue: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
       notes: "Corporate hamper proposal for estate agency onboarding.",
       lastTouch: "Yesterday",
       optOut: false,
@@ -321,17 +325,23 @@ function seedAutomations(): Automation[] {
       id: "auto_1",
       workspaceId: "ws_forklift",
       name: "Missed call recovery",
+      description: "Drafts an SMS and a follow-up task whenever a missed call lands.",
+      templateKey: "missed_call_follow_up",
       trigger: "Missed call received",
       actions: ["Send SMS", "Create lead task", "Notify owner"],
       enabled: true,
       status: "active",
+      lastRunAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+      lastRunAtValue: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
     },
     {
       id: "auto_2",
       workspaceId: "ws_hamper",
-      name: "Morning email digest",
-      trigger: "Every weekday at 09:00",
-      actions: ["Summarise urgent emails", "Create priority tasks"],
+      name: "Daily CRM summary",
+      description: "Summarise active leads and overdue follow-ups every morning.",
+      templateKey: "daily_crm_summary",
+      trigger: "Every morning",
+      actions: ["Summarise open leads", "Highlight overdue follow-ups"],
       enabled: false,
       status: "draft",
     },
@@ -407,10 +417,50 @@ function seedScheduledJobs(): ScheduledJob[] {
     {
       id: "job_1",
       workspaceId: "ws_forklift",
-      name: "Morning email summary",
-      schedule: "0 9 * * 1-5",
-      taskType: "summarize_email_placeholder",
+      name: "Daily CRM summary",
+      schedule: "Every day, 09:00",
+      taskType: "daily_crm_summary",
+      templateKey: "daily_crm_summary",
+      recurrence: "daily",
       enabled: false,
+      status: "pending",
+      nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      nextRunAtValue: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      retryCount: 0,
+      maxRetries: 2,
+      requiresApproval: false,
+    },
+    {
+      id: "job_2",
+      workspaceId: "ws_forklift",
+      name: "Follow up John Smith",
+      schedule: "Tomorrow at 10:00",
+      taskType: "lead_follow_up",
+      recurrence: "once",
+      enabled: true,
+      status: "pending",
+      nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      nextRunAtValue: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      retryCount: 0,
+      maxRetries: 3,
+      leadId: "lead_1",
+      automationId: "auto_1",
+      requiresApproval: true,
+    },
+  ];
+}
+
+function seedJobRuns(): JobRunLog[] {
+  return [
+    {
+      id: "jobrun_1",
+      workspaceId: "ws_forklift",
+      jobId: "job_2",
+      jobName: "Follow up John Smith",
+      status: "completed",
+      attempts: 1,
+      createdAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+      detail: "Created a follow-up task and queued an approval-safe outreach draft.",
     },
   ];
 }
@@ -436,6 +486,7 @@ function createSnapshot(): Snapshot {
     toolCalls: seedToolCalls(),
     integrationSettings: seedIntegrationSettings(),
     scheduledJobs: seedScheduledJobs(),
+    jobRuns: seedJobRuns(),
   };
 }
 
@@ -529,6 +580,15 @@ export function addTask(task: TaskItem) {
   return task;
 }
 
+export function updateTask(taskId: string, updates: Partial<TaskItem>) {
+  const task = state().tasks.find((entry) => entry.id === taskId);
+  if (!task) {
+    return null;
+  }
+  Object.assign(task, updates);
+  return task;
+}
+
 export function addActivity(activity: Activity) {
   const snapshot = state();
   snapshot.activities.unshift(activity);
@@ -551,6 +611,42 @@ export function addCrmTimelineItem(item: CrmTimelineItem) {
   const snapshot = state();
   snapshot.crmTimeline.unshift(item);
   return item;
+}
+
+export function addScheduledJob(job: ScheduledJob) {
+  const snapshot = state();
+  snapshot.scheduledJobs.unshift(job);
+  return job;
+}
+
+export function updateScheduledJob(
+  jobId: string,
+  updates: Partial<ScheduledJob>,
+) {
+  const job = state().scheduledJobs.find((entry) => entry.id === jobId);
+  if (!job) {
+    return null;
+  }
+  Object.assign(job, updates);
+  return job;
+}
+
+export function addJobRun(run: JobRunLog) {
+  const snapshot = state();
+  snapshot.jobRuns.unshift(run);
+  return run;
+}
+
+export function updateAutomation(
+  automationId: string,
+  updates: Partial<Automation>,
+) {
+  const automation = state().automations.find((entry) => entry.id === automationId);
+  if (!automation) {
+    return null;
+  }
+  Object.assign(automation, updates);
+  return automation;
 }
 
 export function addAuditLog(entry: Omit<AuditLog, "id" | "timestamp">) {
@@ -645,6 +741,7 @@ export function createGeneratedLead(
     stage: "New lead",
     estimatedValue: 0,
     nextFollowUpAt: "Not scheduled",
+    nextFollowUpAtValue: undefined,
     notes: "",
     lastTouch: "Just now",
     optOut: false,

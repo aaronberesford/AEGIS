@@ -92,6 +92,20 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
   const workspaceAutomations = snapshot.automations.filter(
     (automation) => automation.workspaceId === currentWorkspace.id,
   );
+  const workspaceScheduledJobs = snapshot.scheduledJobs.filter(
+    (job) => job.workspaceId === currentWorkspace.id,
+  );
+  const workspaceJobRuns = snapshot.jobRuns.filter(
+    (run) => run.workspaceId === currentWorkspace.id,
+  );
+  const dueFollowUps = workspaceLeads
+    .filter((lead) => !!lead.nextFollowUpAtValue)
+    .sort((left, right) => {
+      const leftValue = new Date(left.nextFollowUpAtValue ?? "").getTime();
+      const rightValue = new Date(right.nextFollowUpAtValue ?? "").getTime();
+      return leftValue - rightValue;
+    })
+    .slice(0, 4);
   const selectedLead =
     workspaceLeads.find((lead) => lead.id === selectedLeadId) ?? workspaceLeads[0] ?? null;
 
@@ -110,7 +124,7 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
       {
         label: "Check schedule",
         color: "text-[#f5b749]",
-        prompt: "Every weekday at 9am, summarize important emails.",
+        prompt: "Every morning summarize my leads.",
       },
       {
         label: "More",
@@ -475,6 +489,150 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
     }
   }
 
+  async function scheduleLeadFollowUpQuick(
+    leadId: string,
+    label: "tomorrow" | "in_2_days" | "next_week",
+  ) {
+    const offsets = {
+      tomorrow: 1,
+      in_2_days: 2,
+      next_week: 7,
+    } satisfies Record<string, number>;
+    const dueAt = new Date();
+    dueAt.setDate(dueAt.getDate() + offsets[label]);
+    dueAt.setHours(9, 0, 0, 0);
+
+    setBusy(true);
+    setLastError(null);
+    try {
+      const response = await fetch("/api/crm/follow-up", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId: currentWorkspace.id,
+          leadId,
+          dueAt: dueAt.toISOString(),
+        }),
+      });
+      await readJson<{ job: unknown }>(response);
+      setLastInfo("Follow-up scheduled.");
+      await refreshState();
+    } catch (error) {
+      setLastError(
+        error instanceof Error ? error.message : "Unable to schedule follow-up.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleAutomation(automationId: string, enabled: boolean) {
+    setBusy(true);
+    setLastError(null);
+    try {
+      const response = await fetch(`/api/automations/${automationId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled }),
+      });
+      await readJson<{ automation: unknown }>(response);
+      setLastInfo(enabled ? "Automation enabled." : "Automation disabled.");
+      await refreshState();
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : "Unable to update automation.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleScheduledJob(jobId: string, enabled: boolean) {
+    setBusy(true);
+    setLastError(null);
+    try {
+      const response = await fetch(`/api/jobs/${jobId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled }),
+      });
+      await readJson<{ job: unknown }>(response);
+      setLastInfo(enabled ? "Scheduled job enabled." : "Scheduled job disabled.");
+      await refreshState();
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : "Unable to update job.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runDueJobs() {
+    setBusy(true);
+    setLastError(null);
+    try {
+      const response = await fetch("/api/jobs/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId: currentWorkspace.id,
+          limit: 10,
+        }),
+      });
+      const payload = await readJson<{ processed: number }>(response);
+      setLastInfo(
+        payload.processed > 0
+          ? `Processed ${payload.processed} due jobs.`
+          : "No due jobs were ready to run.",
+      );
+      await refreshState();
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : "Unable to run jobs.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createAutomationTemplate(
+    templateKey:
+      | "missed_call_follow_up"
+      | "no_reply_after_2_days"
+      | "daily_crm_summary"
+      | "weekly_sales_summary",
+    enabled = false,
+  ) {
+    setBusy(true);
+    setLastError(null);
+    try {
+      const response = await fetch("/api/automations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId: currentWorkspace.id,
+          templateKey,
+          enabled,
+        }),
+      });
+      await readJson<{ automation: unknown }>(response);
+      setLastInfo("Automation template created.");
+      await refreshState();
+      setScreen("automations");
+    } catch (error) {
+      setLastError(
+        error instanceof Error ? error.message : "Unable to create automation.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="min-h-screen px-3 py-4 sm:px-6 sm:py-8">
       <div className="mx-auto flex max-w-6xl items-start justify-center gap-10">
@@ -505,12 +663,12 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
           </div>
           <div className="glass-panel rounded-[28px] p-6">
             <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-[var(--text-muted)]">
-              Phase 2 status
+              Platform status
             </p>
             <ul className="mt-4 space-y-3 text-sm text-[var(--text-secondary)]">
               <li>OpenAI voice and agent calls stay on the server.</li>
               <li>Twilio actions execute only after approval.</li>
-              <li>Demo mode still works without live credentials.</li>
+              <li>Scheduled jobs and follow-up automations persist by workspace.</li>
             </ul>
           </div>
         </section>
@@ -638,6 +796,45 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
                   </button>
                 ))}
               </div>
+
+              <section className="mt-8">
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="text-[16px] font-semibold text-white">Follow-ups due</h3>
+                  <button
+                    onClick={() => setScreen("crm")}
+                    className="text-[15px] font-medium text-[var(--accent-soft)]"
+                  >
+                    Open CRM
+                  </button>
+                </div>
+                <div className="glass-panel rounded-[24px] p-4">
+                  {dueFollowUps.length === 0 && (
+                    <p className="text-sm text-[var(--text-secondary)]">
+                      No lead follow-ups are queued right now.
+                    </p>
+                  )}
+                  {dueFollowUps.map((lead) => (
+                    <button
+                      key={lead.id}
+                      onClick={() => {
+                        setSelectedLeadId(lead.id);
+                        setScreen("crm");
+                      }}
+                      className="flex w-full items-center justify-between border-b border-white/6 py-3 text-left last:border-b-0"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-white">{lead.name}</p>
+                        <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                          {lead.company}
+                        </p>
+                      </div>
+                      <span className="text-xs text-[var(--accent-soft)]">
+                        {lead.nextFollowUpAt}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
 
               <section className="mt-10">
                 <div className="mb-4 flex items-center justify-between">
@@ -836,6 +1033,15 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
                           onSms={() =>
                             void sendMessage(`Send an SMS follow-up to ${selectedLead.name}.`)
                           }
+                          onFollowUpTomorrow={() =>
+                            void scheduleLeadFollowUpQuick(selectedLead.id, "tomorrow")
+                          }
+                          onFollowUpIn2Days={() =>
+                            void scheduleLeadFollowUpQuick(selectedLead.id, "in_2_days")
+                          }
+                          onFollowUpNextWeek={() =>
+                            void scheduleLeadFollowUpQuick(selectedLead.id, "next_week")
+                          }
                           onAddNote={() => void addLeadNote()}
                           onCreateTask={() => void createLeadTask()}
                         />
@@ -872,27 +1078,156 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
 
                   {screen === "automations" && (
                     <div className="space-y-3">
-                      {workspaceAutomations.map((automation) => (
-                        <article
-                          key={automation.id}
-                          className="rounded-2xl border border-white/8 bg-white/[0.03] p-4"
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => void createAutomationTemplate("missed_call_follow_up")}
+                          className="rounded-2xl border border-[rgba(124,77,255,0.22)] bg-[rgba(124,77,255,0.12)] px-4 py-4 text-left text-sm font-semibold text-white"
                         >
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-sm font-semibold text-white">
-                              {automation.name}
-                            </h4>
-                            <span className="text-xs text-[var(--accent-soft)]">
-                              {automation.status}
-                            </span>
-                          </div>
-                          <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                            {automation.trigger}
-                          </p>
-                          <p className="mt-2 text-xs text-[var(--text-muted)]">
-                            {automation.actions.join(" | ")}
-                          </p>
-                        </article>
-                      ))}
+                          Missed-call follow-up
+                        </button>
+                        <button
+                          onClick={() => void createAutomationTemplate("no_reply_after_2_days")}
+                          className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-4 text-left text-sm font-semibold text-white"
+                        >
+                          No reply after 2 days
+                        </button>
+                        <button
+                          onClick={() =>
+                            void createAutomationTemplate("daily_crm_summary", true)
+                          }
+                          className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-4 text-left text-sm font-semibold text-white"
+                        >
+                          Daily CRM summary
+                        </button>
+                        <button
+                          onClick={() =>
+                            void createAutomationTemplate("weekly_sales_summary", true)
+                          }
+                          className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-4 text-left text-sm font-semibold text-white"
+                        >
+                          Weekly sales summary
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => void runDueJobs()}
+                        className="w-full rounded-2xl border border-[rgba(124,77,255,0.25)] bg-[rgba(124,77,255,0.12)] px-4 py-3 text-left text-sm font-semibold text-white"
+                      >
+                        Run due jobs now
+                      </button>
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-sm font-semibold text-white">Active automations</h4>
+                          <span className="text-xs text-[var(--text-muted)]">
+                            {workspaceAutomations.length}
+                          </span>
+                        </div>
+                        <div className="mt-3 space-y-3">
+                          {workspaceAutomations.map((automation) => (
+                            <article
+                              key={automation.id}
+                              className="rounded-2xl border border-white/8 bg-black/20 p-4"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <h4 className="text-sm font-semibold text-white">
+                                    {automation.name}
+                                  </h4>
+                                  <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                    {automation.trigger}
+                                  </p>
+                                  {automation.lastRunAt && (
+                                    <p className="mt-1 text-xs text-[var(--text-muted)]">
+                                      Last run: {automation.lastRunAt}
+                                    </p>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() =>
+                                    void toggleAutomation(automation.id, !automation.enabled)
+                                  }
+                                  className={cn(
+                                    "rounded-full px-3 py-1 text-xs font-semibold",
+                                    automation.enabled
+                                      ? "bg-[rgba(34,197,94,0.16)] text-[#4ade80]"
+                                      : "bg-white/[0.06] text-[var(--text-secondary)]",
+                                  )}
+                                >
+                                  {automation.enabled ? "Enabled" : "Disabled"}
+                                </button>
+                              </div>
+                              <p className="mt-2 text-xs text-[var(--text-muted)]">
+                                {automation.actions.join(" | ")}
+                              </p>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                        <h4 className="text-sm font-semibold text-white">Scheduled jobs</h4>
+                        <div className="mt-3 space-y-3">
+                          {workspaceScheduledJobs.map((job) => (
+                            <article
+                              key={job.id}
+                              className="rounded-2xl border border-white/8 bg-black/20 p-4"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-white">{job.name}</p>
+                                  <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                    {job.schedule}
+                                  </p>
+                                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                                    {job.status}
+                                    {job.nextRunAt ? ` | next ${job.nextRunAt}` : ""}
+                                  </p>
+                                  {job.lastError && (
+                                    <p className="mt-1 text-xs text-[#ff9b9b]">
+                                      {job.lastError}
+                                    </p>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() => void toggleScheduledJob(job.id, !job.enabled)}
+                                  className={cn(
+                                    "rounded-full px-3 py-1 text-xs font-semibold",
+                                    job.enabled
+                                      ? "bg-[rgba(34,197,94,0.16)] text-[#4ade80]"
+                                      : "bg-white/[0.06] text-[var(--text-secondary)]",
+                                  )}
+                                >
+                                  {job.enabled ? "On" : "Off"}
+                                </button>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                        <h4 className="text-sm font-semibold text-white">Recent runs</h4>
+                        <div className="mt-3 space-y-3">
+                          {workspaceJobRuns.length === 0 && (
+                            <p className="text-sm text-[var(--text-secondary)]">
+                              No automation runs yet.
+                            </p>
+                          )}
+                          {workspaceJobRuns.map((run) => (
+                            <article
+                              key={run.id}
+                              className="rounded-2xl border border-white/8 bg-black/20 p-4"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-semibold text-white">{run.jobName}</p>
+                                <span className="text-xs text-[var(--text-muted)]">
+                                  {run.createdAt}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                {run.detail}
+                              </p>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   )}
 
@@ -1257,6 +1592,9 @@ function CrmLeadDrawer({
   setCrmTaskTitle,
   onCall,
   onSms,
+  onFollowUpTomorrow,
+  onFollowUpIn2Days,
+  onFollowUpNextWeek,
   onAddNote,
   onCreateTask,
 }: {
@@ -1269,6 +1607,9 @@ function CrmLeadDrawer({
   setCrmTaskTitle: (value: string) => void;
   onCall: () => void;
   onSms: () => void;
+  onFollowUpTomorrow: () => void;
+  onFollowUpIn2Days: () => void;
+  onFollowUpNextWeek: () => void;
   onAddNote: () => void;
   onCreateTask: () => void;
 }) {
@@ -1307,6 +1648,26 @@ function CrmLeadDrawer({
           className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white"
         >
           SMS
+        </button>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <button
+          onClick={onFollowUpTomorrow}
+          className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-white"
+        >
+          Tomorrow
+        </button>
+        <button
+          onClick={onFollowUpIn2Days}
+          className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-white"
+        >
+          In 2 days
+        </button>
+        <button
+          onClick={onFollowUpNextWeek}
+          className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-white"
+        >
+          Next week
         </button>
       </div>
       <textarea

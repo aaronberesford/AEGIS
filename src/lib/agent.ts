@@ -1,8 +1,10 @@
 import "server-only";
 
+import { parseRelativeFollowUpPhrase } from "@/lib/automation-templates";
 import {
   addCrmNote,
   addAuditLog,
+  createAutomationFromTemplate,
   createFollowUpTask,
   createGeneratedApproval,
   createGeneratedAutomation,
@@ -10,6 +12,9 @@ import {
   createScheduledTaskDraft,
   findCrmMatches,
   findPrimaryLeadForWorkspace,
+  getAutomationTemplates,
+  getOverdueFollowUps,
+  scheduleLeadFollowUp,
   summarizeRecentCrmActivity,
   updateLeadStatus,
   workspaceById,
@@ -78,16 +83,23 @@ async function buildHeuristicResult(
     message =
       "The SMS draft is ready and waiting for approval before anything is sent.";
   } else if (lower.includes("automation") || lower.includes("missed call")) {
+    const template = getAutomationTemplates().find(
+      (entry) => entry.key === "missed_call_follow_up",
+    );
     draftAutomation = createGeneratedAutomation(
       workspaceId,
-      "Missed call workflow",
-      "Missed call received",
-      [
+      template?.name ?? "Missed call workflow",
+      template?.trigger ?? "Missed call received",
+      template?.actions ?? [
         "Send SMS within 2 minutes",
         "Create or update lead in CRM",
         "Notify workspace owner",
         "Schedule follow-up task for next business day",
       ],
+      {
+        description: template?.description,
+        templateKey: template?.key,
+      },
     );
     actionCards.push({
       id: "action_auto",
@@ -100,7 +112,7 @@ async function buildHeuristicResult(
   } else if (lower.includes("schedule") || lower.includes("weekday")) {
     const task = await createScheduledTaskDraft(
       workspaceId,
-      "Weekday morning email summary",
+      "Weekday morning CRM summary",
       "Every weekday, 09:00",
     );
     actionCards.push({
@@ -110,7 +122,7 @@ async function buildHeuristicResult(
       description: task.dueLabel,
     });
     message =
-      "I drafted the scheduled task so you can wire it into the cron runner once the database is connected.";
+      "I drafted the scheduled CRM summary task for the automation runner.";
   } else {
     actionCards.push({
       id: "action_note",
@@ -133,6 +145,100 @@ async function handleCrmToolIntent(
   messageText: string,
 ): Promise<AgentResult | null> {
   const lower = messageText.toLowerCase();
+
+  const followUpRequest = parseRelativeFollowUpPhrase(messageText);
+  if (followUpRequest) {
+    const matches = await findCrmMatches(workspaceId, followUpRequest.targetName);
+    const lead = matches.leads[0] ?? (await findPrimaryLeadForWorkspace(workspaceId));
+    if (!lead) {
+      return {
+        message: "I could not find a matching lead to schedule that follow-up.",
+        actionCards: [],
+      };
+    }
+    const { job } = await scheduleLeadFollowUp({
+      workspaceId,
+      leadId: lead.id,
+      dueAt: followUpRequest.dueAt.toISOString(),
+      title: `Follow up ${lead.name}`,
+      description: `Scheduled by AEGIS from chat: ${messageText}`,
+    });
+    return {
+      message: `Follow-up scheduled for ${lead.name} on ${followUpRequest.dueLabel}.`,
+      actionCards: [
+        {
+          id: job.id,
+          kind: "task",
+          title: job.name,
+          description: job.nextRunAt ?? followUpRequest.dueLabel,
+        },
+      ],
+    };
+  }
+
+  if (lower.includes("every morning summarize my leads")) {
+    const { automation, job } = await createAutomationFromTemplate({
+      workspaceId,
+      templateKey: "daily_crm_summary",
+      enabled: true,
+    });
+    return {
+      message: "Daily CRM summary automation is active and will run every morning.",
+      actionCards: [
+        {
+          id: automation.id,
+          kind: "automation",
+          title: automation.name,
+          description: job.schedule,
+        },
+      ],
+    };
+  }
+
+  if (
+    lower.includes("create a missed-call follow-up automation") ||
+    lower.includes("create a missed call follow-up automation")
+  ) {
+    const { automation, job } = await createAutomationFromTemplate({
+      workspaceId,
+      templateKey: "missed_call_follow_up",
+      enabled: false,
+    });
+    return {
+      message:
+        "I created the missed-call follow-up automation as a draft so you can enable it when ready.",
+      actionCards: [
+        {
+          id: automation.id,
+          kind: "automation",
+          title: automation.name,
+          description: job.schedule,
+        },
+      ],
+    };
+  }
+
+  if (lower.includes("show overdue follow-ups")) {
+    const overdue = await getOverdueFollowUps(workspaceId);
+    if (overdue.length === 0) {
+      return {
+        message: "You have no overdue lead follow-ups right now.",
+        actionCards: [],
+      };
+    }
+    return {
+      message: `You have ${overdue.length} overdue follow-ups: ${overdue
+        .slice(0, 3)
+        .map((lead) => lead.name)
+        .join(", ")}.`,
+      actionCards: overdue.slice(0, 3).map((lead) => ({
+        id: lead.id,
+        kind: "task",
+        title: `Overdue follow-up: ${lead.name}`,
+        description: lead.nextFollowUpAt,
+      })),
+    };
+  }
 
   if (lower.includes("summarize crm") || lower.includes("summarise crm")) {
     const summary = await summarizeRecentCrmActivity(workspaceId);
