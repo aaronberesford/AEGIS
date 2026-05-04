@@ -37,6 +37,16 @@ function ensure<T>(value: T | null | undefined, message: string, code: string) {
   return value;
 }
 
+const SEEDED_USER_ID = "11111111-1111-1111-1111-111111111111";
+
+function normalizeUserId(userId: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    userId,
+  )
+    ? userId
+    : SEEDED_USER_ID;
+}
+
 function formatStamp(value: string | Date) {
   const date = typeof value === "string" ? new Date(value) : value;
   return Number.isNaN(date.getTime()) ? String(value) : formatDateLabel(date);
@@ -1215,7 +1225,7 @@ export async function addAuditLog(entry: Omit<AuditLog, "id" | "timestamp">) {
   const supabase = getSupabaseAdmin();
   const inserted = await supabase.from("audit_logs").insert({
     workspace_id: entry.workspaceId,
-    user_id: entry.userId,
+    user_id: normalizeUserId(entry.userId),
     action: entry.action,
     input: { value: entry.input },
     output: { value: entry.output },
@@ -1299,7 +1309,10 @@ export async function updateApproval(
       payload: {
         title: current.title,
         message: updates.message ?? current.message,
-        metadata: updates.metadata ?? current.metadata ?? {},
+        metadata: {
+          ...(current.metadata ?? {}),
+          ...(updates.metadata ?? {}),
+        },
         scheduledFor: current.scheduledFor,
       },
       last_error: null,
