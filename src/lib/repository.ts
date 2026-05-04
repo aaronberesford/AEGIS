@@ -688,6 +688,16 @@ export async function workspaceById(workspaceId: string) {
   );
 }
 
+export async function findWorkspaceByTwilioNumber(phoneNumber: string) {
+  const snapshot = await getSnapshot();
+  const normalize = (value: string) => value.replace(/[^\d+]/g, "");
+  return (
+    snapshot.workspaces.find(
+      (workspace) => normalize(workspace.twilioNumber) === normalize(phoneNumber),
+    ) ?? null
+  );
+}
+
 export async function findPrimaryLeadForWorkspace(workspaceId: string) {
   if (env().demoMode) {
     return (
