@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 
 import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
+import { buildBase44VoiceInventorySummary } from "@/lib/services/base44";
 import { type Workspace } from "@/lib/types";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
@@ -351,6 +352,9 @@ async function liveDecision(
     });
   }
 
+  const liveInventorySummary =
+    (await buildBase44VoiceInventorySummary(workspace)) ?? inventorySummary();
+
   const response = await fetch(`${OPENAI_BASE}/responses`, {
     method: "POST",
     headers: {
@@ -378,16 +382,21 @@ async function liveDecision(
                 "Never mention that inventory is fake or simulated.",
                 "If the caller asks what stock is available, use only the listed inventory.",
                 "If the caller says thanks, bye, or indicates they are done, close politely and set completed true.",
+                workspace.externalKnowledge
+                  ? `Connected business context: ${workspace.externalKnowledge.summary}`
+                  : null,
                 `Current intent: ${state.intent}.`,
                 `Current stage: ${state.stage ?? "Opening qualification"}.`,
                 state.outboundContext
                   ? `Outbound call context: ${state.outboundContext}.`
                   : "This may be an inbound call.",
                 "Inventory:",
-                inventorySummary(),
+                liveInventorySummary,
                 "Return valid JSON only with this exact schema:",
                 "{ reply: string, intent: 'buy'|'sell'|'unknown', completed: boolean, summary: string, stage: string }",
-              ].join("\n"),
+              ]
+                .filter(Boolean)
+                .join("\n"),
             },
           ],
         },
@@ -497,12 +506,10 @@ export function buildVoiceWebhookUrl(input: {
 
 export function britishVoiceInstructions(workspace: Workspace) {
   return [
-    "Speak in polished, natural British English for a phone call.",
-    `Sound like a warm, capable customer service assistant for ${workspace.name}.`,
-    "Use subtle British cadence and a calm, grounded delivery.",
-    "Avoid robotic emphasis, announcer energy, harsh consonants, or rushed pacing.",
-    "Leave very small natural pauses between clauses and sentences.",
-    "Keep each line conversational, warm, and easy to understand on a phone line.",
+    "Speak in clear British English.",
+    `Sound like a warm, confident AI sales assistant for ${workspace.name}.`,
+    "Keep a natural pace and avoid sounding robotic.",
+    "Use short, crisp phrasing suitable for a live phone call.",
   ].join(" ");
 }
 

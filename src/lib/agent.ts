@@ -19,8 +19,13 @@ import {
   updateLeadStatus,
   workspaceById,
 } from "@/lib/repository";
+import {
+  buildBase44KnowledgeContext,
+  searchBase44Customers,
+  searchBase44Inventory,
+} from "@/lib/services/base44";
 import { generateAgentDecision } from "@/lib/services/openai";
-import { type AgentResult, type Lead } from "@/lib/types";
+import { type AgentResult, type Lead, type Workspace } from "@/lib/types";
 
 async function currentLeadForWorkspace(workspaceId: string): Promise<Lead | null> {
   return findPrimaryLeadForWorkspace(workspaceId);
@@ -370,6 +375,98 @@ async function handleCrmToolIntent(
   return null;
 }
 
+async function handleBase44Intent(
+  workspace: Workspace,
+  messageText: string,
+): Promise<AgentResult | null> {
+  const lower = messageText.toLowerCase();
+
+  if (
+    /\b(stock|inventory|what trucks|what forklifts|what do we have|available forklifts|pallet trucks)\b/.test(
+      lower,
+    )
+  ) {
+    const narrowedInventoryQuery = /\b(toyota|nissan|linde|hyster|diesel|electric|lpg|3 ton|2 ton|pallet)\b/.test(
+      lower,
+    )
+      ? messageText
+      : undefined;
+    const matches = await searchBase44Inventory(workspace, narrowedInventoryQuery);
+    if (matches.length === 0) {
+      return {
+        message:
+          "I checked Base44 but didn’t find a matching stock item. Try a brand, fuel type, or capacity.",
+        actionCards: [],
+      };
+    }
+
+    return {
+      message: `Here’s the latest live stock from Base44:\n${matches
+        .slice(0, 6)
+        .map((item) => `- ${item}`)
+        .join("\n")}`,
+      actionCards: [
+        {
+          id: "base44_stock",
+          kind: "note",
+          title: "Base44 stock lookup",
+          description: `${matches.length} matching stock items found`,
+        },
+      ],
+    };
+  }
+
+  if (/\b(customer|client|buyer|company)\b/.test(lower)) {
+    const query = messageText
+      .replace(/\b(customer|client|buyer|company|details|find|search|show|lookup)\b/gi, "")
+      .trim();
+    const matches = await searchBase44Customers(workspace, query);
+    if (matches.length === 0) {
+      return {
+        message:
+          "I checked Base44 customer records but didn’t find a matching contact or company.",
+        actionCards: [],
+      };
+    }
+
+    return {
+      message: `Here’s what I found in Base44 customer records:\n${matches
+        .slice(0, 6)
+        .map((item) => `- ${item}`)
+        .join("\n")}`,
+      actionCards: [
+        {
+          id: "base44_customer",
+          kind: "note",
+          title: "Base44 customer lookup",
+          description: `${matches.length} matching customer records found`,
+        },
+      ],
+    };
+  }
+
+  if (/\b(business info|company info|about forklift pro|what do we do|modules|pages)\b/.test(lower)) {
+    const knowledge = await buildBase44KnowledgeContext(workspace);
+    if (!knowledge) {
+      return null;
+    }
+
+    return {
+      message: knowledge,
+      actionCards: [
+        {
+          id: "base44_business",
+          kind: "note",
+          title: "Base44 business context",
+          description: "Live ForkliftPro app context loaded.",
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
 function mapDecisionToResult(
   workspaceId: string,
   messageText: string,
@@ -475,6 +572,19 @@ export async function runAegisAgent(input: {
     throw new Error("Workspace not found");
   }
 
+  const base44Result = await handleBase44Intent(workspace, input.message);
+  if (base44Result) {
+    await addAuditLog({
+      workspaceId: workspace.id,
+      userId: input.userId,
+      action: "agent_base44_tool",
+      input: input.message,
+      output: base44Result.message,
+      approvalStatus: "not_required",
+    });
+    return base44Result;
+  }
+
   const crmToolResult = await handleCrmToolIntent(workspace.id, input.message);
   if (crmToolResult) {
     await addAuditLog({
@@ -488,9 +598,12 @@ export async function runAegisAgent(input: {
     return crmToolResult;
   }
 
+  const knowledgeContext = await buildBase44KnowledgeContext(workspace);
+
   const decision = await generateAgentDecision({
     workspace,
     message: input.message,
+    knowledgeContext,
   });
   const result = await mapDecisionToResult(workspace.id, input.message, decision);
 

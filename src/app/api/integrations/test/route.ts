@@ -3,15 +3,16 @@ import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { toErrorResponse } from "@/lib/errors";
 import { upsertIntegrationSetting } from "@/lib/repository";
+import { testBase44Connection } from "@/lib/services/base44";
 import { testOpenAiConnection } from "@/lib/services/openai";
 import { testTwilioConnection } from "@/lib/services/twilio";
 
 export async function POST(request: Request) {
-  let provider: "openai" | "twilio" | undefined;
+  let provider: "openai" | "twilio" | "base44" | undefined;
   let workspaceId: string | undefined;
   try {
     const body = (await request.json()) as {
-      provider?: "openai" | "twilio";
+      provider?: "openai" | "twilio" | "base44";
       workspaceId?: string;
     };
     provider = body.provider;
@@ -27,12 +28,19 @@ export async function POST(request: Request) {
     const result =
       body.provider === "openai"
         ? await testOpenAiConnection()
-        : await testTwilioConnection();
+        : body.provider === "twilio"
+          ? await testTwilioConnection()
+          : await testBase44Connection();
 
     await upsertIntegrationSetting({
       workspaceId: body.workspaceId,
       provider: body.provider,
-      kind: body.provider === "openai" ? "ai" : "telephony",
+      kind:
+        body.provider === "openai"
+          ? "ai"
+          : body.provider === "twilio"
+            ? "telephony"
+            : "data",
       status: "connected",
       config:
         body.provider === "openai"
@@ -40,10 +48,15 @@ export async function POST(request: Request) {
               model: env().openAiModel,
               lastTestResult: result.detail,
             }
-          : {
-              phoneNumber: env().twilioPhoneNumber,
-              lastTestResult: result.detail,
-            },
+          : body.provider === "twilio"
+            ? {
+                phoneNumber: env().twilioPhoneNumber,
+                lastTestResult: result.detail,
+              }
+            : {
+                appId: env().base44AppId,
+                lastTestResult: result.detail,
+              },
     });
 
     return NextResponse.json(result);
@@ -53,7 +66,12 @@ export async function POST(request: Request) {
         await upsertIntegrationSetting({
           workspaceId,
           provider,
-          kind: provider === "openai" ? "ai" : "telephony",
+          kind:
+            provider === "openai"
+              ? "ai"
+              : provider === "twilio"
+                ? "telephony"
+                : "data",
           status: "error",
           config: {
             lastError: error instanceof Error ? error.message : "Connection test failed.",

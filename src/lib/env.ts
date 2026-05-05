@@ -11,9 +11,8 @@ export function env() {
     openAiApiKey: process.env.OPENAI_API_KEY ?? "",
     openAiModel: process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
     openAiSpeechModel: process.env.OPENAI_SPEECH_MODEL ?? "gpt-4o-mini-tts",
-    openAiPhoneVoice: process.env.OPENAI_PHONE_VOICE ?? "marin",
     openAiRealtimeModel: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-1.5",
-    openAiRealtimeVoice: process.env.OPENAI_REALTIME_VOICE ?? "marin",
+    openAiRealtimeVoice: process.env.OPENAI_REALTIME_VOICE ?? "cedar",
     twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? "",
     twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? "",
     twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER ?? "",
@@ -23,6 +22,9 @@ export function env() {
     twilioMediaStreamPort: Number(process.env.TWILIO_MEDIA_STREAM_PORT ?? "3001"),
     supabaseUrl: process.env.SUPABASE_URL ?? "",
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+    base44AppId: process.env.BASE44_APP_ID ?? "",
+    base44ApiKey: process.env.BASE44_API_KEY ?? "",
+    base44WorkspaceId: process.env.BASE44_WORKSPACE_ID ?? "",
     appUrl,
   };
 }

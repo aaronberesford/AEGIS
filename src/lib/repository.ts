@@ -9,6 +9,7 @@ import {
 } from "@/lib/automation-templates";
 import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
+import { enrichWorkspaceWithBase44Knowledge } from "@/lib/services/base44";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
 import {
   type AgentResult,
@@ -507,8 +508,10 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     );
   }
 
-  const workspaces = (workspaceResponse.data ?? []).map((row) =>
-    mapWorkspace(row as Record<string, unknown>),
+  const workspaces = await Promise.all(
+    (workspaceResponse.data ?? []).map(async (row) =>
+      enrichWorkspaceWithBase44Knowledge(mapWorkspace(row as Record<string, unknown>)),
+    ),
   );
   const selectedWorkspaceId =
     currentWorkspaceId && workspaces.some((workspace) => workspace.id === currentWorkspaceId)

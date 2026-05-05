@@ -17,6 +17,12 @@ export type Workspace = {
     speed: number;
     style: string;
   };
+  externalKnowledge?: {
+    source: "base44";
+    appName: string;
+    summary: string;
+    syncedAt: string;
+  };
 };
 
 export type ApprovalRisk = "low" | "medium" | "high";

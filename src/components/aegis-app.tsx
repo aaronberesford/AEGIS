@@ -20,6 +20,7 @@ type ScreenKey =
 type IntegrationState = {
   openai?: { status: "idle" | "loading" | "success" | "error"; detail?: string };
   twilio?: { status: "idle" | "loading" | "success" | "error"; detail?: string };
+  base44?: { status: "idle" | "loading" | "success" | "error"; detail?: string };
 };
 
 type ApprovalEditState = {
@@ -371,7 +372,7 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
     }
   }
 
-  async function testConnection(provider: "openai" | "twilio") {
+  async function testConnection(provider: "openai" | "twilio" | "base44") {
     setIntegrationState((current) => ({
       ...current,
       [provider]: { status: "loading" },
@@ -1435,6 +1436,27 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
                         onClick={() => void testConnection("twilio")}
                         buttonLabel="Test Twilio"
                       />
+                      <SettingsCard
+                        title="Base44 connection"
+                        detail={
+                          integrationState.base44?.detail ??
+                          currentWorkspace.externalKnowledge?.summary ??
+                          "Connect ForkliftPro inventory, customers, parts, sales, and business info on the server."
+                        }
+                        status={integrationState.base44?.status ?? "idle"}
+                        onClick={() => void testConnection("base44")}
+                        buttonLabel="Test Base44"
+                      />
+                      {currentWorkspace.externalKnowledge && (
+                        <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                          <p className="font-semibold text-white">Live business knowledge</p>
+                          <p className="mt-2">{currentWorkspace.externalKnowledge.summary}</p>
+                          <p className="mt-2 text-xs text-[var(--text-muted)]">
+                            Synced from {currentWorkspace.externalKnowledge.appName} at{" "}
+                            {currentWorkspace.externalKnowledge.syncedAt}
+                          </p>
+                        </div>
+                      )}
                       <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
                         <p className="font-semibold text-white">Business hours</p>
                         <p className="mt-2">{currentWorkspace.businessHours}</p>

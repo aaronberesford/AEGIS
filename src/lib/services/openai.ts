@@ -99,6 +99,7 @@ function safeJsonParse<T>(value: string): T | null {
 export async function generateAgentDecision(input: {
   workspace: Workspace;
   message: string;
+  knowledgeContext?: string | null;
 }) {
   const config = requireOpenAiConfig();
 
@@ -126,11 +127,19 @@ export async function generateAgentDecision(input: {
                 `Tone of voice: ${input.workspace.toneOfVoice}.`,
                 `Services: ${input.workspace.services.join(", ")}.`,
                 `Target customers: ${input.workspace.targetCustomers.join(", ")}.`,
+                input.workspace.externalKnowledge
+                  ? `Connected knowledge source: ${input.workspace.externalKnowledge.source} (${input.workspace.externalKnowledge.appName}). ${input.workspace.externalKnowledge.summary}`
+                  : null,
+                input.knowledgeContext
+                  ? `Live business context from connected systems:\n${input.knowledgeContext}`
+                  : null,
                 "Return valid JSON only.",
                 "If the user asks to send SMS or make a call, you must create an approval draft instead of claiming the action already happened.",
                 "JSON schema: { reply: string, intent: 'general'|'send_sms'|'make_call'|'create_automation'|'schedule_task', approvalTitle?: string, recipient?: string, message?: string, reason?: string, risk?: 'low'|'medium'|'high', taskTitle?: string, taskDueLabel?: string, automationName?: string, automationTrigger?: string, automationActions?: string[] }",
                 "Keep the reply concise and operational.",
-              ].join(" "),
+              ]
+                .filter(Boolean)
+                .join(" "),
             },
           ],
         },
