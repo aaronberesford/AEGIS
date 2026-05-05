@@ -9,6 +9,8 @@ import { type Workspace } from "@/lib/types";
 type Base44Forklift = {
   id: string;
   listing_id?: string;
+  url_path?: string | null;
+  slug?: string | null;
   title?: string;
   brand?: string;
   model?: string | null;
@@ -20,10 +22,22 @@ type Base44Forklift = {
   price_display?: string | null;
   stock_status?: string | null;
   mast_height_m?: number | null;
-  location?: string | null;
+  mast_type?: string | null;
+  free_lift?: boolean | null;
+  sideshift?: boolean | null;
+  attachments?: string[] | null;
+  tyres_use_type?: string | null;
+  loler_status?: string | null;
+  loler_expiry_date?: string | null;
   condition_notes?: string | null;
-  card_spec_line?: string | null;
   short_highlights?: string | null;
+  delivery_info?: string | null;
+  location?: string | null;
+  battery_condition?: string | null;
+  condition_grade?: string | null;
+  card_spec_line?: string | null;
+  card_headline?: string | null;
+  ebay_listing_status?: string | null;
   updated_date?: string;
 };
 
@@ -185,29 +199,89 @@ function lowStockParts(items: Base44Part[]) {
   );
 }
 
-function forkliftLine(item: Base44Forklift) {
-  const title =
+function forkliftTitle(item: Base44Forklift) {
+  return (
     item.title?.trim() ||
     [item.brand, item.model].filter(Boolean).join(" ").trim() ||
     item.listing_id ||
-    "Forklift";
+    "Forklift"
+  );
+}
+
+function forkliftLine(item: Base44Forklift) {
   const details = [
     item.listing_id,
     item.year ? String(item.year) : null,
     item.fuel_type ?? null,
     typeof item.capacity_tonnes === "number" ? `${item.capacity_tonnes}t` : null,
     typeof item.mast_height_m === "number" ? `${item.mast_height_m}m mast` : null,
+    item.mast_type ?? null,
     item.price_display ?? null,
     item.stock_status ?? null,
   ]
     .filter(Boolean)
     .join(" | ");
 
-  return `${title}${details ? ` — ${details}` : ""}`;
+  return `${forkliftTitle(item)}${details ? ` - ${details}` : ""}`;
+}
+
+function forkliftRichSummary(item: Base44Forklift) {
+  const extras = [
+    item.condition_grade ? `Condition: ${item.condition_grade}` : null,
+    item.battery_condition ? `Battery: ${item.battery_condition}` : null,
+    item.loler_status ? `LOLER: ${item.loler_status}` : null,
+    item.location ? `Location: ${item.location}` : null,
+    item.attachments?.length ? `Attachments: ${item.attachments.join(", ")}` : null,
+    item.sideshift ? "Includes sideshift" : null,
+    item.free_lift ? "Includes free lift" : null,
+    item.short_highlights ?? null,
+    item.condition_notes ?? null,
+  ]
+    .filter(Boolean)
+    .join(". ");
+
+  return `${forkliftLine(item)}${extras ? `. ${extras}` : ""}`;
+}
+
+function forkliftSearchFields(item: Base44Forklift) {
+  return [
+    item.listing_id,
+    item.url_path,
+    item.slug,
+    item.title,
+    item.brand,
+    item.model,
+    item.category,
+    item.year ? String(item.year) : null,
+    item.fuel_type,
+    typeof item.capacity_tonnes === "number" ? `${item.capacity_tonnes}` : null,
+    typeof item.hours === "number" ? `${item.hours}` : null,
+    item.price_display,
+    item.stock_status,
+    typeof item.mast_height_m === "number" ? `${item.mast_height_m}` : null,
+    item.mast_type,
+    item.free_lift ? "free lift" : null,
+    item.sideshift ? "sideshift" : null,
+    item.attachments?.join(" "),
+    item.tyres_use_type,
+    item.loler_status,
+    item.delivery_info,
+    item.location,
+    item.condition_notes,
+    item.short_highlights,
+    item.battery_condition,
+    item.condition_grade,
+    item.card_spec_line,
+    item.card_headline,
+    item.ebay_listing_status,
+  ].filter(Boolean);
 }
 
 function palletTruckLine(item: Base44PalletTruck) {
-  const title = [item.make, item.model].filter(Boolean).join(" ").trim() || item.listing_id || "Pallet truck";
+  const title =
+    [item.make, item.model].filter(Boolean).join(" ").trim() ||
+    item.listing_id ||
+    "Pallet truck";
   const details = [
     item.listing_id,
     typeof item.load_capacity_kg === "number" ? `${item.load_capacity_kg}kg` : null,
@@ -218,7 +292,7 @@ function palletTruckLine(item: Base44PalletTruck) {
     .filter(Boolean)
     .join(" | ");
 
-  return `${title}${details ? ` — ${details}` : ""}`;
+  return `${title}${details ? ` - ${details}` : ""}`;
 }
 
 function customerLine(customer: Base44Customer) {
@@ -231,7 +305,7 @@ function customerLine(customer: Base44Customer) {
   const details = [customer.name, customer.type, customer.phone]
     .filter(Boolean)
     .join(" | ");
-  return `${title}${details ? ` — ${details}` : ""}`;
+  return `${title}${details ? ` - ${details}` : ""}`;
 }
 
 function buildAgentContext(data: Base44WorkspaceData) {
@@ -249,7 +323,7 @@ function buildAgentContext(data: Base44WorkspaceData) {
     forklifts.length
       ? `Current forklift stock highlights:\n${forklifts
           .slice(0, 10)
-          .map((item) => `- ${forkliftLine(item)}`)
+          .map((item) => `- ${forkliftRichSummary(item)}`)
           .join("\n")}`
       : null,
     pallets.length
@@ -272,7 +346,7 @@ function buildAgentContext(data: Base44WorkspaceData) {
             const date = sale.sale_date || "Unknown date";
             const price =
               typeof sale.sale_price === "number"
-                ? `£${sale.sale_price.toLocaleString()}`
+                ? `GBP ${sale.sale_price.toLocaleString()}`
                 : "price not recorded";
             return `- ${name} on ${date}: ${price}`;
           })
@@ -284,7 +358,7 @@ function buildAgentContext(data: Base44WorkspaceData) {
           .map((part) => {
             const qty = typeof part.quantity === "number" ? part.quantity : "?";
             const min = typeof part.min_quantity === "number" ? part.min_quantity : "?";
-            return `- ${part.part_name || part.part_number || "Part"} — qty ${qty}, min ${min}`;
+            return `- ${part.part_name || part.part_number || "Part"} - qty ${qty}, min ${min}`;
           })
           .join("\n")}`
       : null,
@@ -317,7 +391,10 @@ async function fetchBase44WorkspaceData(): Promise<Base44WorkspaceData> {
       await Promise.all([
         fetchBase44Metadata(),
         client.entities.Forklift.list("-updated_date", 120) as Promise<Base44Forklift[]>,
-        client.entities.PalletTruck.list("-updated_date", 80) as Promise<Base44PalletTruck[]>,
+        client.entities.PalletTruck.list(
+          "-updated_date",
+          80,
+        ) as Promise<Base44PalletTruck[]>,
         client.entities.Customer.list("-updated_date", 120) as Promise<Base44Customer[]>,
         client.entities.Sale.list("-updated_date", 60) as Promise<Base44Sale[]>,
         client.entities.MaintenanceRecord.list(
@@ -414,9 +491,12 @@ export async function buildBase44VoiceInventorySummary(workspace: Workspace) {
   return [
     `Business info: ${data.app.user_description ?? workspace.name}.`,
     `Live forklift stock: ${forklifts.length} forklifts and ${pallets.length} pallet trucks available or reserved.`,
-    forklifts.slice(0, 12).map((item) => forkliftLine(item)).join("\n"),
+    forklifts.slice(0, 12).map((item) => forkliftRichSummary(item)).join("\n"),
     pallets.length
-      ? `Pallet trucks:\n${pallets.slice(0, 5).map((item) => palletTruckLine(item)).join("\n")}`
+      ? `Pallet trucks:\n${pallets
+          .slice(0, 5)
+          .map((item) => palletTruckLine(item))
+          .join("\n")}`
       : null,
   ]
     .filter(Boolean)
@@ -433,7 +513,9 @@ export async function searchBase44Inventory(workspace: Workspace, query?: string
   const inventory = [...stockForklifts(data.forklifts), ...stockPalletTrucks(data.palletTrucks)];
   if (!haystack) {
     return inventory.slice(0, 8).map((item) =>
-      "brand" in item || "fuel_type" in item ? forkliftLine(item as Base44Forklift) : palletTruckLine(item as Base44PalletTruck),
+      "brand" in item || "fuel_type" in item
+        ? forkliftRichSummary(item as Base44Forklift)
+        : palletTruckLine(item as Base44PalletTruck),
     );
   }
 
@@ -441,25 +523,22 @@ export async function searchBase44Inventory(workspace: Workspace, query?: string
     .filter((item) => {
       const values =
         "brand" in item || "fuel_type" in item
-          ? [
-              (item as Base44Forklift).listing_id,
-              (item as Base44Forklift).title,
-              (item as Base44Forklift).brand,
-              (item as Base44Forklift).model,
-              (item as Base44Forklift).fuel_type,
-              (item as Base44Forklift).category,
-            ]
+          ? forkliftSearchFields(item as Base44Forklift)
           : [
               (item as Base44PalletTruck).listing_id,
               (item as Base44PalletTruck).make,
               (item as Base44PalletTruck).model,
               (item as Base44PalletTruck).condition,
             ];
-      return values.filter(Boolean).some((value) => String(value).toLowerCase().includes(haystack));
+      return values
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(haystack));
     })
     .slice(0, 8)
     .map((item) =>
-      "brand" in item || "fuel_type" in item ? forkliftLine(item as Base44Forklift) : palletTruckLine(item as Base44PalletTruck),
+      "brand" in item || "fuel_type" in item
+        ? forkliftRichSummary(item as Base44Forklift)
+        : palletTruckLine(item as Base44PalletTruck),
     );
 }
 
