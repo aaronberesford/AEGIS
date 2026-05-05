@@ -94,6 +94,7 @@ Set these environment variables in Vercel:
 - `TWILIO_MEDIA_STREAM_URL=wss://voice.yourdomain.com/media-stream`
 - `SUPABASE_URL=...`
 - `SUPABASE_SERVICE_ROLE_KEY=...`
+- `AEGIS_PHONE_SYNC_SECRET=shared-secret-used-by-vercel-and-render`
 
 ### 2. Deploy the voice bridge to Render
 
@@ -112,6 +113,10 @@ Set these environment variables in Render:
 - `OPENAI_API_KEY=...`
 - `OPENAI_REALTIME_MODEL=gpt-realtime-1.5`
 - `OPENAI_REALTIME_VOICE=cedar`
+- `BASE44_APP_ID=...`
+- `BASE44_API_KEY=...`
+- `AEGIS_SYNC_URL=https://aegis.yourdomain.com`
+- `AEGIS_PHONE_SYNC_SECRET=shared-secret-used-by-vercel-and-render`
 
 Render will provide:
 

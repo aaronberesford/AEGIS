@@ -25,6 +25,7 @@ export function env() {
     base44AppId: process.env.BASE44_APP_ID ?? "",
     base44ApiKey: process.env.BASE44_API_KEY ?? "",
     base44WorkspaceId: process.env.BASE44_WORKSPACE_ID ?? "",
+    aegisPhoneSyncSecret: process.env.AEGIS_PHONE_SYNC_SECRET ?? "",
     appUrl,
   };
 }

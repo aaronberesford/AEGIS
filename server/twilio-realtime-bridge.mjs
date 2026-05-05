@@ -14,6 +14,8 @@ const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE ?? "cedar";
 const BASE44_APP_ID = process.env.BASE44_APP_ID ?? "";
 const BASE44_API_KEY = process.env.BASE44_API_KEY ?? "";
 const BASE44_CACHE_MS = 2 * 60 * 1000;
+const AEGIS_SYNC_URL = process.env.AEGIS_SYNC_URL ?? "";
+const AEGIS_PHONE_SYNC_SECRET = process.env.AEGIS_PHONE_SYNC_SECRET ?? "";
 
 if (!OPENAI_API_KEY) {
   console.error("Missing OPENAI_API_KEY for Twilio realtime bridge.");
@@ -31,6 +33,11 @@ let cachedInventory = {
   ].join("\n"),
 };
 
+let cachedCustomers = {
+  expiresAt: 0,
+  items: [],
+};
+
 function normalizeMastHeight(value) {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return null;
@@ -45,6 +52,17 @@ function normalizeMastHeight(value) {
 
 function defaultInventory() {
   return cachedInventory.text;
+}
+
+function normalizePhone(value) {
+  return String(value ?? "").replace(/[^\d+]/g, "");
+}
+
+function phoneCandidates(phoneNumber) {
+  const normalized = normalizePhone(phoneNumber);
+  const digitsOnly = normalized.replace(/[^\d]/g, "");
+  const suffix = digitsOnly.length > 9 ? digitsOnly.slice(-9) : digitsOnly;
+  return new Set([normalized, digitsOnly, suffix].filter(Boolean));
 }
 
 async function loadBase44Inventory() {
@@ -110,7 +128,65 @@ async function loadBase44Inventory() {
   }
 }
 
-function buildInstructions(workspaceName, inventory, outboundContext = "") {
+async function loadBase44CustomerByPhone(phoneNumber) {
+  if (!BASE44_APP_ID || !BASE44_API_KEY || !phoneNumber) {
+    return null;
+  }
+
+  const candidates = phoneCandidates(phoneNumber);
+  if (cachedCustomers.expiresAt <= Date.now()) {
+    const client = createClient({
+      appId: BASE44_APP_ID,
+      headers: {
+        api_key: BASE44_API_KEY,
+      },
+    });
+
+    try {
+      const customers = await client.entities.Customer.list("-updated_date", 120);
+      cachedCustomers = {
+        expiresAt: Date.now() + BASE44_CACHE_MS,
+        items: customers,
+      };
+    } catch (error) {
+      console.error("Base44 customer load failed in realtime bridge:", error);
+      return null;
+    } finally {
+      client.cleanup();
+    }
+  }
+
+  return (
+    cachedCustomers.items.find((customer) => {
+      const customerCandidates = phoneCandidates(customer.phone ?? "");
+      return [...customerCandidates].some((candidate) => candidates.has(candidate));
+    }) ?? null
+  );
+}
+
+function customerContext(customer) {
+  if (!customer) {
+    return "No previous Base44 customer record was found. If they are new, capture their full name, company, email and best callback details before ending the call.";
+  }
+
+  return [
+    `Returning caller details: ${customer.name || "Unknown name"}.`,
+    customer.company ? `Company: ${customer.company}.` : "",
+    customer.email ? `Email: ${customer.email}.` : "",
+    customer.type ? `Customer type: ${customer.type}.` : "",
+    customer.notes ? `Previous notes: ${customer.notes}` : "",
+    "Acknowledge them as an existing contact and continue naturally.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildInstructions(
+  workspaceName,
+  inventory,
+  outboundContext = "",
+  existingCustomerContext = "",
+) {
   return [
     `You are AEGIS, the live AI phone assistant for ${workspaceName}.`,
     "Speak in natural British English with a calm, polished customer service tone.",
@@ -121,9 +197,13 @@ function buildInstructions(workspaceName, inventory, outboundContext = "") {
     "Start by finding out whether they want to buy a forklift or sell one.",
     "If buying, ask for power type, lift capacity, lift height, budget, timing and location, then recommend matching stock only from this inventory.",
     "If selling, ask for make, model, year, fuel, lift capacity, mast height, hours, condition, asking price and location.",
+    "Always work out whether the caller is already known or a new contact.",
+    "For new callers, collect full name, company and email before ending the call.",
+    "If they do not buy or sell today, make sure the conversation leaves a clear callback or follow-up action.",
     "Do not mention that inventory is fake or simulated.",
     "If the caller says thanks or bye, close politely and naturally.",
     outboundContext ? `Outbound context: ${outboundContext}` : "",
+    existingCustomerContext,
     "Inventory:",
     inventory,
   ]
@@ -137,6 +217,44 @@ function initialPrompt(workspaceName, outboundContext = "") {
   }
 
   return `Greet the caller for ${workspaceName} and ask whether they want to buy a forklift or sell one today.`;
+}
+
+function collectText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function pushTranscriptTurn(turns, speaker, text) {
+  const cleaned = collectText(text);
+  if (!cleaned) {
+    return;
+  }
+
+  const last = turns[turns.length - 1];
+  if (last && last.speaker === speaker && last.text === cleaned) {
+    return;
+  }
+
+  turns.push({ speaker, text: cleaned });
+}
+
+async function syncCallOutcome(input) {
+  if (!AEGIS_SYNC_URL || !AEGIS_PHONE_SYNC_SECRET || !input.transcript?.trim()) {
+    return;
+  }
+
+  const response = await fetch(`${AEGIS_SYNC_URL.replace(/\/$/, "")}/api/twilio/voice-sync`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-aegis-sync-secret": AEGIS_PHONE_SYNC_SECRET,
+    },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    console.error("Voice sync request failed:", detail || response.status);
+  }
 }
 
 const server = http.createServer((req, res) => {
@@ -175,9 +293,17 @@ wss.on("connection", (twilioWs) => {
   let sessionReady = false;
   let startedGreeting = false;
   let inventoryText = defaultInventory();
+  let customer = null;
+  let syncSubmitted = false;
+  const transcriptTurns = [];
   let callInfo = {
     workspaceName: "Forklift Pro Solutions",
     outboundContext: "",
+    workspaceId: "",
+    leadId: "",
+    contactPhone: "",
+    callSid: "",
+    mode: "inbound",
   };
 
   const openAiWs = new WebSocket(
@@ -204,6 +330,7 @@ wss.on("connection", (twilioWs) => {
           callInfo.workspaceName,
           inventoryText,
           callInfo.outboundContext,
+          customerContext(customer),
         ),
         audio: {
           input: {
@@ -216,6 +343,24 @@ wss.on("connection", (twilioWs) => {
           },
         },
       },
+    });
+  };
+
+  const submitSync = async () => {
+    if (syncSubmitted || !callInfo.workspaceId) {
+      return;
+    }
+
+    syncSubmitted = true;
+    await syncCallOutcome({
+      workspaceId: callInfo.workspaceId,
+      callSid: callInfo.callSid || undefined,
+      phoneNumber: callInfo.contactPhone || undefined,
+      direction: callInfo.mode === "outbound" ? "outbound" : "inbound",
+      transcript: transcriptTurns
+        .map((turn) => `${turn.speaker === "caller" ? "Caller" : "AEGIS"}: ${turn.text}`)
+        .join("\n"),
+      knownCustomerId: customer?.id ?? null,
     });
   };
 
@@ -271,6 +416,36 @@ wss.on("connection", (twilioWs) => {
         return;
       }
 
+      if (event.type === "conversation.item.input_audio_transcription.completed") {
+        pushTranscriptTurn(transcriptTurns, "caller", event.transcript);
+        return;
+      }
+
+      if (event.type === "response.audio_transcript.done") {
+        pushTranscriptTurn(transcriptTurns, "assistant", event.transcript);
+        return;
+      }
+
+      if (event.type === "response.output_text.done") {
+        pushTranscriptTurn(transcriptTurns, "assistant", event.text);
+        return;
+      }
+
+      if (event.type === "response.done") {
+        const outputs = event.response?.output ?? [];
+        for (const item of outputs) {
+          const content = item?.content ?? [];
+          for (const part of content) {
+            if (part?.transcript) {
+              pushTranscriptTurn(transcriptTurns, "assistant", part.transcript);
+            } else if (part?.text) {
+              pushTranscriptTurn(transcriptTurns, "assistant", part.text);
+            }
+          }
+        }
+        return;
+      }
+
       if (event.type === "response.output_audio.delta" || event.type === "response.audio.delta") {
         if (!streamSid || !event.delta || twilioWs.readyState !== WebSocket.OPEN) {
           return;
@@ -319,9 +494,15 @@ wss.on("connection", (twilioWs) => {
           streamSid = event.start?.streamSid ?? null;
           const custom = event.start?.customParameters ?? {};
           callInfo = {
+            workspaceId: custom.workspaceId || "",
             workspaceName: custom.workspaceName || "Forklift Pro Solutions",
             outboundContext: custom.outboundContext || "",
+            leadId: custom.leadId || "",
+            contactPhone: custom.contactPhone || "",
+            callSid: event.start?.callSid || "",
+            mode: custom.mode || "inbound",
           };
+          customer = await loadBase44CustomerByPhone(callInfo.contactPhone);
           await refreshInstructions();
           maybeStartGreeting();
           break;
@@ -335,6 +516,7 @@ wss.on("connection", (twilioWs) => {
           break;
 
         case "stop":
+          await submitSync();
           if (openAiWs.readyState === WebSocket.OPEN) {
             openAiWs.close();
           }
@@ -349,6 +531,7 @@ wss.on("connection", (twilioWs) => {
   });
 
   twilioWs.on("close", () => {
+    void submitSync();
     if (openAiWs.readyState === WebSocket.OPEN) {
       openAiWs.close();
     }

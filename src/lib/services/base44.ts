@@ -64,6 +64,16 @@ type Base44Customer = {
   updated_date?: string;
 };
 
+export type Base44CustomerRecord = {
+  id: string;
+  name: string;
+  company: string | null;
+  email: string | null;
+  phone: string | null;
+  type: string | null;
+  notes: string | null;
+};
+
 type Base44Sale = {
   id: string;
   customer_name?: string | null;
@@ -306,6 +316,30 @@ function customerLine(customer: Base44Customer) {
     .filter(Boolean)
     .join(" | ");
   return `${title}${details ? ` - ${details}` : ""}`;
+}
+
+function normalizePhone(value: string | null | undefined) {
+  return String(value ?? "").replace(/[^\d+]/g, "");
+}
+
+function phoneCandidates(phoneNumber: string) {
+  const normalized = normalizePhone(phoneNumber);
+  const digitsOnly = normalized.replace(/[^\d]/g, "");
+  const suffix = digitsOnly.length > 9 ? digitsOnly.slice(-9) : digitsOnly;
+
+  return new Set([normalized, digitsOnly, suffix].filter(Boolean));
+}
+
+function mapCustomerRecord(customer: Base44Customer): Base44CustomerRecord {
+  return {
+    id: customer.id,
+    name: customer.name?.trim() || "Unknown customer",
+    company: customer.company?.trim() || null,
+    email: customer.email?.trim() || null,
+    phone: customer.phone?.trim() || null,
+    type: customer.type?.trim() || null,
+    notes: customer.notes?.trim() || null,
+  };
 }
 
 function buildAgentContext(data: Base44WorkspaceData) {
@@ -561,4 +595,85 @@ export async function searchBase44Customers(workspace: Workspace, query: string)
     )
     .slice(0, 8)
     .map(customerLine);
+}
+
+export async function findBase44CustomerByPhone(
+  workspace: Workspace,
+  phoneNumber: string,
+) {
+  if (!isBase44EnabledForWorkspace(workspace) || !phoneNumber.trim()) {
+    return null;
+  }
+
+  const data = await fetchBase44WorkspaceData();
+  const candidates = phoneCandidates(phoneNumber);
+  const match = data.customers.find((customer) => {
+    const customerCandidates = phoneCandidates(customer.phone ?? "");
+    return [...customerCandidates].some((candidate) => candidates.has(candidate));
+  });
+
+  return match ? mapCustomerRecord(match) : null;
+}
+
+export async function upsertBase44CustomerFromCall(
+  workspace: Workspace,
+  input: {
+    phoneNumber: string;
+    name?: string | null;
+    company?: string | null;
+    email?: string | null;
+    existingCustomerId?: string | null;
+    type?: string | null;
+    historyNote: string;
+  },
+) {
+  if (!isBase44EnabledForWorkspace(workspace)) {
+    return null;
+  }
+
+  const client = getBase44Client();
+  try {
+    const existing =
+      (input.existingCustomerId
+        ? ((await client.entities.Customer.get(input.existingCustomerId)) as Base44Customer)
+        : null) ?? (await findBase44CustomerByPhone(workspace, input.phoneNumber));
+
+    const nextNotes = [existing?.notes, input.historyNote].filter(Boolean).join("\n\n");
+
+    if (existing) {
+      const updated = (await client.entities.Customer.update(existing.id, {
+        name: input.name?.trim() || existing.name,
+        company: input.company?.trim() || existing.company,
+        email: input.email?.trim() || existing.email,
+        phone: input.phoneNumber.trim() || existing.phone,
+        type: input.type?.trim() || existing.type || "Customer",
+        notes: nextNotes,
+      })) as Base44Customer;
+
+      cache.clear();
+      return mapCustomerRecord(updated);
+    }
+
+    const created = (await client.entities.Customer.create({
+      name: input.name?.trim() || "Unknown caller",
+      company: input.company?.trim() || "",
+      email: input.email?.trim() || "",
+      phone: input.phoneNumber.trim(),
+      type: input.type?.trim() || "Lead",
+      notes: input.historyNote,
+    })) as Base44Customer;
+
+    cache.clear();
+    return mapCustomerRecord(created);
+  } catch (error) {
+    throw new AppError(
+      error instanceof Error ? error.message : "Unable to update Base44 customer.",
+      {
+        code: "BASE44_CUSTOMER_UPSERT_FAILED",
+        status: 502,
+      },
+    );
+  } finally {
+    client.cleanup();
+  }
 }

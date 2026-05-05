@@ -26,6 +26,22 @@ type AgentDecision = {
   automationActions?: string[];
 };
 
+export type PhoneCallOutcome = {
+  summary: string;
+  intent: "buy" | "sell" | "support" | "unknown";
+  callerName?: string | null;
+  company?: string | null;
+  email?: string | null;
+  requestedCallback: boolean;
+  callbackTiming?: string | null;
+  purchaseCompleted: boolean;
+  shouldCreateLead: boolean;
+  leadStatus: string;
+  requirementsSummary: string;
+  nextAction: string;
+  customerHistoryNote: string;
+};
+
 function requireOpenAiConfig() {
   const config = env();
 
@@ -292,4 +308,97 @@ export async function testOpenAiConnection() {
     ok: true,
     detail: `OpenAI connection is valid. Default model: ${config.openAiModel}.`,
   };
+}
+
+export async function extractPhoneCallOutcome(input: {
+  workspace: Workspace;
+  phoneNumber: string;
+  direction: "inbound" | "outbound";
+  transcript: string;
+  existingCustomerContext?: string | null;
+}) {
+  const config = requireOpenAiConfig();
+
+  if (config.demoMode) {
+    return {
+      summary: `Phone call with ${input.phoneNumber}.`,
+      intent: "unknown",
+      requestedCallback: true,
+      callbackTiming: "tomorrow morning",
+      purchaseCompleted: false,
+      shouldCreateLead: true,
+      leadStatus: "Phone enquiry",
+      requirementsSummary: "Manual review required.",
+      nextAction: "Call back and review the enquiry.",
+      customerHistoryNote: `Phone call captured for ${input.phoneNumber}. Follow-up required.`,
+    } satisfies PhoneCallOutcome;
+  }
+
+  const response = await fetch(`${OPENAI_BASE}/responses`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.openAiApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: config.openAiModel,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                `You extract structured forklift-sales call outcomes for ${input.workspace.name}.`,
+                `Industry: ${input.workspace.industry}.`,
+                `Direction: ${input.direction}. Caller phone: ${input.phoneNumber}.`,
+                input.existingCustomerContext
+                  ? `Existing customer context: ${input.existingCustomerContext}`
+                  : "No previous customer context was found.",
+                "Return valid JSON only.",
+                "Infer whether this was a buy enquiry, sell enquiry, support call, or unknown.",
+                "If no purchase happened, set requestedCallback true when a callback or follow-up is clearly needed.",
+                "If the caller is new or there is a commercial opportunity, set shouldCreateLead true.",
+                "leadStatus should be a short CRM status such as Phone enquiry, Buying enquiry, Selling enquiry, Qualified, Follow-up required, or Won.",
+                "customerHistoryNote should be one short paragraph suitable to append to a customer notes field.",
+                "JSON schema: { summary: string, intent: 'buy'|'sell'|'support'|'unknown', callerName?: string|null, company?: string|null, email?: string|null, requestedCallback: boolean, callbackTiming?: string|null, purchaseCompleted: boolean, shouldCreateLead: boolean, leadStatus: string, requirementsSummary: string, nextAction: string, customerHistoryNote: string }",
+              ]
+                .filter(Boolean)
+                .join(" "),
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: input.transcript,
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  const payload = await parseJsonResponse<{
+    output_text?: string;
+    output?: Array<{
+      type?: string;
+      content?: Array<{
+        type?: string;
+        text?: string;
+      }>;
+    }>;
+  }>(response);
+  const parsed = safeJsonParse<PhoneCallOutcome>(extractResponseText(payload));
+
+  if (!parsed?.summary || !parsed.intent || !parsed.leadStatus || !parsed.nextAction) {
+    throw new AppError("OpenAI returned an unreadable phone call outcome.", {
+      code: "OPENAI_BAD_PHONE_CALL_PAYLOAD",
+      status: 502,
+    });
+  }
+
+  return parsed;
 }

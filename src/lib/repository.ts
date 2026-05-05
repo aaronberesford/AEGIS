@@ -1227,6 +1227,8 @@ export async function logCallActivity(input: {
   summary: string;
   outcome?: string;
   direction?: "inbound" | "outbound";
+  transcript?: string;
+  nextAction?: string;
 }) {
   if (env().demoMode) {
     demoStore.addCrmTimelineItem({
@@ -1249,6 +1251,8 @@ export async function logCallActivity(input: {
     status: input.status,
     summary: input.summary,
     outcome: input.outcome ?? null,
+    transcript: input.transcript ?? null,
+    next_action: input.nextAction ?? null,
   });
   if (inserted.error) {
     throw new AppError(`Unable to log call activity: ${inserted.error.message}`, {
