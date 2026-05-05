@@ -25,11 +25,14 @@ import {
   type JobRunLog,
   type Lead,
   type Message,
+  type NotificationItem,
   type ScheduledJob,
   type Snapshot,
+  type Suggestion,
   type TaskItem,
   type ToolCall,
   type Workspace,
+  type WorkspaceSummary,
 } from "@/lib/types";
 
 function ensure<T>(value: T | null | undefined, message: string, code: string) {
@@ -158,6 +161,42 @@ function mapIntegration(row: Record<string, unknown>): IntegrationSetting {
       row.config && typeof row.config === "object"
         ? (row.config as Record<string, string | number | boolean | null>)
         : {},
+  };
+}
+
+function mapSuggestion(row: Record<string, unknown>): Suggestion {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    type: String(row.type),
+    title: String(row.title),
+    description: String(row.description ?? ""),
+    suggestedAction: String(row.suggested_action ?? ""),
+    priority: String(row.priority ?? "medium") as Suggestion["priority"],
+    status: String(row.status ?? "pending") as Suggestion["status"],
+    linkedEntityId: row.linked_entity_id ? String(row.linked_entity_id) : undefined,
+    createdAt: formatStamp(String(row.created_at ?? new Date().toISOString())),
+  };
+}
+
+function mapNotification(row: Record<string, unknown>): NotificationItem {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    message: String(row.message),
+    type: String(row.type ?? "info"),
+    read: Boolean(row.read),
+    createdAt: formatStamp(String(row.created_at ?? new Date().toISOString())),
+  };
+}
+
+function mapWorkspaceSummary(row: Record<string, unknown>): WorkspaceSummary {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    kind: "daily",
+    content: String(row.content ?? ""),
+    createdAt: formatStamp(String(row.created_at ?? new Date().toISOString())),
   };
 }
 
@@ -454,6 +493,9 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     notesResponse,
     smsResponse,
     callResponse,
+    suggestionResponse,
+    notificationResponse,
+    summaryResponse,
   ] = await Promise.all([
     supabase.from("users").select("*").order("created_at", { ascending: true }).limit(1),
     supabase.from("workspaces").select("*").order("created_at", { ascending: true }),
@@ -476,6 +518,14 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     supabase.from("notes").select("*").order("created_at", { ascending: false }).limit(50),
     supabase.from("sms_logs").select("*").order("created_at", { ascending: false }).limit(50),
     supabase.from("call_logs").select("*").order("created_at", { ascending: false }).limit(50),
+    supabase.from("suggestions").select("*").order("created_at", { ascending: false }).limit(50),
+    supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(50),
+    supabase
+      .from("workspace_summaries")
+      .select("*")
+      .eq("kind", "daily")
+      .order("created_at", { ascending: false })
+      .limit(20),
   ]);
 
   const errors = [
@@ -496,6 +546,9 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     notesResponse.error,
     smsResponse.error,
     callResponse.error,
+    suggestionResponse.error,
+    notificationResponse.error,
+    summaryResponse.error,
   ].filter(Boolean);
 
   if (errors.length > 0) {
@@ -701,6 +754,15 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     auditLogs,
   });
   const callLogs = ((callResponse.data ?? []) as Array<Record<string, unknown>>).map(mapCallLog);
+  const suggestions = (suggestionResponse.data ?? []).map((row) =>
+    mapSuggestion(row as Record<string, unknown>),
+  );
+  const notifications = (notificationResponse.data ?? []).map((row) =>
+    mapNotification(row as Record<string, unknown>),
+  );
+  const workspaceSummaries = (summaryResponse.data ?? []).map((row) =>
+    mapWorkspaceSummary(row as Record<string, unknown>),
+  );
   const userRow = (userResponse.data ?? [])[0] as Record<string, unknown> | undefined;
 
   return {
@@ -725,6 +787,9 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     integrationSettings,
     scheduledJobs,
     jobRuns,
+    suggestions,
+    notifications,
+    workspaceSummaries,
   };
 }
 
@@ -2232,6 +2297,498 @@ export async function runDueScheduledJobs(input?: { workspaceId?: string; limit?
     processed: results.length,
     results,
   };
+}
+
+export type WorkspaceIssueRecord = {
+  type: string;
+  linkedEntityId?: string;
+  title: string;
+  detail: string;
+  metadata?: Record<string, string | number | boolean | null>;
+};
+
+type SuggestionInput = {
+  workspaceId: string;
+  type: string;
+  title: string;
+  description: string;
+  suggestedAction: string;
+  priority: Suggestion["priority"];
+  linkedEntityId?: string;
+};
+
+function parseMaybeDate(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export async function listActiveWorkspaces() {
+  if (env().demoMode) {
+    return demoStore.getSnapshot().workspaces;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const response = await supabase
+    .from("workspaces")
+    .select("*")
+    .order("created_at", { ascending: true });
+
+  if (response.error) {
+    throw new AppError(`Unable to load workspaces: ${response.error.message}`, {
+      code: "SUPABASE_WORKSPACE_LIST_FAILED",
+      status: 500,
+    });
+  }
+
+  return Promise.all(
+    (response.data ?? []).map(async (row) =>
+      enrichWorkspaceWithBase44Knowledge(mapWorkspace(row as Record<string, unknown>)),
+    ),
+  );
+}
+
+export async function createSuggestion(input: SuggestionInput) {
+  if (env().demoMode) {
+    const suggestion: Suggestion = {
+      id: `suggestion_${Math.random().toString(36).slice(2, 10)}`,
+      workspaceId: input.workspaceId,
+      type: input.type,
+      title: input.title,
+      description: input.description,
+      suggestedAction: input.suggestedAction,
+      priority: input.priority,
+      status: "pending",
+      linkedEntityId: input.linkedEntityId,
+      createdAt: formatStamp(new Date()),
+    };
+    demoStore.addSuggestion(suggestion);
+    return suggestion;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const existing = await supabase
+    .from("suggestions")
+    .select("*")
+    .eq("workspace_id", input.workspaceId)
+    .eq("type", input.type)
+    .eq("linked_entity_id", input.linkedEntityId ?? "")
+    .eq("status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existing.error) {
+    throw new AppError(`Unable to read suggestions: ${existing.error.message}`, {
+      code: "SUPABASE_SUGGESTION_READ_FAILED",
+      status: 500,
+    });
+  }
+
+  if (existing.data) {
+    return mapSuggestion(existing.data as Record<string, unknown>);
+  }
+
+  const inserted = await supabase
+    .from("suggestions")
+    .insert({
+      workspace_id: input.workspaceId,
+      type: input.type,
+      title: input.title,
+      description: input.description,
+      suggested_action: input.suggestedAction,
+      priority: input.priority,
+      status: "pending",
+      linked_entity_id: input.linkedEntityId ?? null,
+    })
+    .select("*")
+    .single();
+
+  if (inserted.error) {
+    throw new AppError(`Unable to create suggestion: ${inserted.error.message}`, {
+      code: "SUPABASE_SUGGESTION_INSERT_FAILED",
+      status: 500,
+    });
+  }
+
+  return mapSuggestion(inserted.data as Record<string, unknown>);
+}
+
+export async function createNotification(input: {
+  workspaceId: string;
+  message: string;
+  type: string;
+}) {
+  if (env().demoMode) {
+    const notification: NotificationItem = {
+      id: `notification_${Math.random().toString(36).slice(2, 10)}`,
+      workspaceId: input.workspaceId,
+      message: input.message,
+      type: input.type,
+      read: false,
+      createdAt: formatStamp(new Date()),
+    };
+    demoStore.addNotification(notification);
+    return notification;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const inserted = await supabase
+    .from("notifications")
+    .insert({
+      workspace_id: input.workspaceId,
+      message: input.message,
+      type: input.type,
+      read: false,
+    })
+    .select("*")
+    .single();
+
+  if (inserted.error) {
+    throw new AppError(`Unable to create notification: ${inserted.error.message}`, {
+      code: "SUPABASE_NOTIFICATION_INSERT_FAILED",
+      status: 500,
+    });
+  }
+
+  return mapNotification(inserted.data as Record<string, unknown>);
+}
+
+export async function upsertDailyWorkspaceSummary(input: {
+  workspaceId: string;
+  content: string;
+}) {
+  if (env().demoMode) {
+    return demoStore.upsertWorkspaceSummary({
+      id: `summary_${Math.random().toString(36).slice(2, 10)}`,
+      workspaceId: input.workspaceId,
+      kind: "daily",
+      content: input.content,
+      createdAt: formatStamp(new Date()),
+    });
+  }
+
+  const supabase = getSupabaseAdmin();
+  const inserted = await supabase
+    .from("workspace_summaries")
+    .insert({
+      workspace_id: input.workspaceId,
+      kind: "daily",
+      content: input.content,
+    })
+    .select("*")
+    .single();
+
+  if (inserted.error) {
+    throw new AppError(`Unable to save workspace summary: ${inserted.error.message}`, {
+      code: "SUPABASE_SUMMARY_INSERT_FAILED",
+      status: 500,
+    });
+  }
+
+  return mapWorkspaceSummary(inserted.data as Record<string, unknown>);
+}
+
+export async function acquireBackgroundJobLock(lockKey: string, ttlMinutes = 30) {
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
+
+  if (env().demoMode) {
+    const snapshot = demoStore.getSnapshot();
+    const existing = snapshot.notifications.find(
+      (entry) =>
+        entry.type === "background_lock" &&
+        entry.message === lockKey &&
+        ((parseMaybeDate(entry.createdAt)?.getTime() ?? 0) >
+          Date.now() - ttlMinutes * 60 * 1000),
+    );
+    if (existing) {
+      return false;
+    }
+    demoStore.addNotification({
+      id: `lock_${Math.random().toString(36).slice(2, 10)}`,
+      workspaceId: "system",
+      message: lockKey,
+      type: "background_lock",
+      read: true,
+      createdAt: expiresAt,
+    });
+    return true;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const existing = await supabase
+    .from("background_job_locks")
+    .select("*")
+    .eq("lock_key", lockKey)
+    .maybeSingle();
+
+  if (existing.error) {
+    throw new AppError(`Unable to read background lock: ${existing.error.message}`, {
+      code: "SUPABASE_LOCK_READ_FAILED",
+      status: 500,
+    });
+  }
+
+  const lockedUntil = existing.data?.locked_until
+    ? new Date(String(existing.data.locked_until))
+    : null;
+  if (lockedUntil && lockedUntil.getTime() > Date.now()) {
+    return false;
+  }
+
+  const response = await supabase.from("background_job_locks").upsert(
+    {
+      lock_key: lockKey,
+      locked_until: expiresAt,
+    },
+    { onConflict: "lock_key" },
+  );
+
+  if (response.error) {
+    throw new AppError(`Unable to acquire background lock: ${response.error.message}`, {
+      code: "SUPABASE_LOCK_UPSERT_FAILED",
+      status: 500,
+    });
+  }
+
+  return true;
+}
+
+export async function releaseBackgroundJobLock(lockKey: string) {
+  if (env().demoMode) {
+    return;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const response = await supabase
+    .from("background_job_locks")
+    .update({ locked_until: null })
+    .eq("lock_key", lockKey);
+
+  if (response.error) {
+    throw new AppError(`Unable to release background lock: ${response.error.message}`, {
+      code: "SUPABASE_LOCK_RELEASE_FAILED",
+      status: 500,
+    });
+  }
+}
+
+export async function getWorkspaceIssueSummaryCounts(workspaceId: string) {
+  const issues = await listWorkspaceIssues(workspaceId);
+  return {
+    leadsNeedingFollowUp: issues.filter((issue) =>
+      issue.type.startsWith("lead_followup"),
+    ).length,
+    overdueTasks: issues.filter((issue) => issue.type === "task_overdue").length,
+    pendingApprovals: issues.filter((issue) => issue.type === "approval_pending_stale").length,
+  };
+}
+
+export async function listWorkspaceIssues(workspaceId: string): Promise<WorkspaceIssueRecord[]> {
+  if (env().demoMode) {
+    const snapshot = demoStore.getSnapshot(workspaceId);
+    const now = Date.now();
+    const issues: WorkspaceIssueRecord[] = [];
+
+    for (const lead of snapshot.leads.filter((entry) => entry.workspaceId === workspaceId)) {
+      if (!lead.nextFollowUpAtValue) {
+        issues.push({
+          type: "lead_followup_missing",
+          linkedEntityId: lead.id,
+          title: `Follow-up missing for ${lead.name}`,
+          detail: `${lead.name} has no next follow-up date set.`,
+          metadata: { leadId: lead.id, phone: lead.phone },
+        });
+      } else if (new Date(lead.nextFollowUpAtValue).getTime() <= now) {
+        issues.push({
+          type: "lead_followup_overdue",
+          linkedEntityId: lead.id,
+          title: `Follow-up overdue for ${lead.name}`,
+          detail: `${lead.name} should already have been contacted again.`,
+          metadata: { leadId: lead.id, phone: lead.phone },
+        });
+      }
+    }
+
+    for (const call of snapshot.callLogs.filter(
+      (entry) => entry.workspaceId === workspaceId && entry.direction === "inbound",
+    )) {
+      const replied = snapshot.crmTimeline.some(
+        (item) =>
+          item.workspaceId === workspaceId &&
+          item.type === "sms" &&
+          item.leadId === call.leadId &&
+          item.timestamp >= (call.createdAtValue ?? call.createdAt),
+      );
+      if (!replied) {
+        issues.push({
+          type: "missed_call_no_reply",
+          linkedEntityId: call.id,
+          title: "Missed call has no reply",
+          detail: call.summary,
+          metadata: { leadId: call.leadId ?? "", callId: call.id },
+        });
+      }
+    }
+
+    const recentActivity = [
+      ...snapshot.callLogs.map((entry) => entry.createdAtValue ?? entry.createdAt),
+      ...snapshot.crmTimeline.map((entry) => entry.timestamp),
+    ]
+      .map((value) => parseMaybeDate(value))
+      .filter((value): value is Date => Boolean(value))
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+
+    if (!recentActivity || recentActivity.getTime() < Date.now() - 24 * 60 * 60 * 1000) {
+      issues.push({
+        type: "workspace_inactive_24h",
+        linkedEntityId: workspaceId,
+        title: "No recent activity",
+        detail: "This workspace has been quiet for over 24 hours.",
+      });
+    }
+
+    return issues;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const nowIso = new Date().toISOString();
+  const staleApprovalBefore = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const inactiveBefore = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const [leadsResponse, callsResponse, smsResponse, tasksResponse, approvalsResponse, auditResponse] =
+    await Promise.all([
+      supabase
+        .from("leads")
+        .select("id,full_name,phone,next_follow_up_at")
+        .eq("workspace_id", workspaceId),
+      supabase
+        .from("call_logs")
+        .select("id,lead_id,summary,created_at,direction,status")
+        .eq("workspace_id", workspaceId)
+        .eq("direction", "inbound")
+        .order("created_at", { ascending: false })
+        .limit(25),
+      supabase
+        .from("sms_logs")
+        .select("lead_id,created_at,direction")
+        .eq("workspace_id", workspaceId)
+        .eq("direction", "outbound"),
+      supabase
+        .from("tasks")
+        .select("id,title,due_at,status")
+        .eq("workspace_id", workspaceId),
+      supabase
+        .from("approvals")
+        .select("id,action_type,recipient,created_at")
+        .eq("workspace_id", workspaceId)
+        .eq("status", "pending")
+        .lt("created_at", staleApprovalBefore),
+      supabase
+        .from("audit_logs")
+        .select("created_at")
+        .eq("workspace_id", workspaceId)
+        .order("created_at", { ascending: false })
+        .limit(1),
+    ]);
+
+  const errors = [
+    leadsResponse.error,
+    callsResponse.error,
+    smsResponse.error,
+    tasksResponse.error,
+    approvalsResponse.error,
+    auditResponse.error,
+  ].filter(Boolean);
+
+  if (errors.length > 0) {
+    throw new AppError(`Unable to inspect workspace issues: ${errors[0]?.message}`, {
+      code: "SUPABASE_WORKSPACE_ISSUE_READ_FAILED",
+      status: 500,
+    });
+  }
+
+  const issues: WorkspaceIssueRecord[] = [];
+  for (const row of leadsResponse.data ?? []) {
+    const lead = row as Record<string, unknown>;
+    if (!lead.next_follow_up_at) {
+      issues.push({
+        type: "lead_followup_missing",
+        linkedEntityId: String(lead.id),
+        title: `Follow-up missing for ${String(lead.full_name ?? "lead")}`,
+        detail: `${String(lead.full_name ?? "Lead")} has no follow-up date set.`,
+        metadata: { leadId: String(lead.id), phone: String(lead.phone ?? "") },
+      });
+    } else if (String(lead.next_follow_up_at) <= nowIso) {
+      issues.push({
+        type: "lead_followup_overdue",
+        linkedEntityId: String(lead.id),
+        title: `Follow-up overdue for ${String(lead.full_name ?? "lead")}`,
+        detail: `${String(lead.full_name ?? "Lead")} is overdue for follow-up.`,
+        metadata: { leadId: String(lead.id), phone: String(lead.phone ?? "") },
+      });
+    }
+  }
+
+  for (const row of callsResponse.data ?? []) {
+    const call = row as Record<string, unknown>;
+    const replied = (smsResponse.data ?? []).some((smsRow) => {
+      const sms = smsRow as Record<string, unknown>;
+      return (
+        String(sms.lead_id ?? "") === String(call.lead_id ?? "") &&
+        String(sms.created_at ?? "") >= String(call.created_at ?? "")
+      );
+    });
+    if (!replied) {
+      issues.push({
+        type: "missed_call_no_reply",
+        linkedEntityId: String(call.id),
+        title: "Missed call has no reply",
+        detail: String(call.summary ?? "Inbound call still needs a reply."),
+        metadata: { leadId: String(call.lead_id ?? ""), callId: String(call.id) },
+      });
+    }
+  }
+
+  for (const row of tasksResponse.data ?? []) {
+    const task = row as Record<string, unknown>;
+    if (
+      task.due_at &&
+      String(task.status ?? "") !== "done" &&
+      String(task.due_at) <= nowIso
+    ) {
+      issues.push({
+        type: "task_overdue",
+        linkedEntityId: String(task.id),
+        title: `Task overdue: ${String(task.title ?? "Task")}`,
+        detail: `${String(task.title ?? "Task")} is overdue.`,
+      });
+    }
+  }
+
+  for (const row of approvalsResponse.data ?? []) {
+    const approval = row as Record<string, unknown>;
+    issues.push({
+      type: "approval_pending_stale",
+      linkedEntityId: String(approval.id),
+      title: `Approval pending too long`,
+      detail: `${String(approval.action_type ?? "Approval")} for ${String(approval.recipient ?? "recipient")} has been pending over 2 hours.`,
+    });
+  }
+
+  const latestAudit = (auditResponse.data ?? [])[0] as Record<string, unknown> | undefined;
+  if (!latestAudit?.created_at || String(latestAudit.created_at) < inactiveBefore) {
+    issues.push({
+      type: "workspace_inactive_24h",
+      linkedEntityId: workspaceId,
+      title: "No recent activity",
+      detail: "This workspace has had no logged activity in the last 24 hours.",
+    });
+  }
+
+  return issues;
 }
 
 async function touchAutomationRun(automationId: string, lastRunAtValue: string) {

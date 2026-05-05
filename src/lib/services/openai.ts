@@ -42,6 +42,23 @@ export type PhoneCallOutcome = {
   customerHistoryNote: string;
 };
 
+export type WorkspaceIssue = {
+  type: string;
+  linkedEntityId?: string;
+  title: string;
+  detail: string;
+  metadata?: Record<string, string | number | boolean | null>;
+};
+
+export type WorkspaceSuggestionDraft = {
+  issueType: string;
+  title: string;
+  description: string;
+  suggestedAction: string;
+  priority: "low" | "medium" | "high";
+  actionType?: "notify" | "create_task" | "send_sms" | "call_customer" | "update_website" | "bulk_update" | "none";
+};
+
 function requireOpenAiConfig() {
   const config = env();
 
@@ -401,4 +418,156 @@ export async function extractPhoneCallOutcome(input: {
   }
 
   return parsed;
+}
+
+export async function generateWorkspaceSuggestionDrafts(input: {
+  workspace: Workspace;
+  issues: WorkspaceIssue[];
+  mode: "check" | "deep_scan";
+}) {
+  const config = requireOpenAiConfig();
+
+  if (config.demoMode) {
+    return input.issues.slice(0, 5).map((issue) => ({
+      issueType: issue.type,
+      title: issue.title,
+      description: issue.detail,
+      suggestedAction: "Review this issue in AEGIS and prepare the next follow-up step.",
+      priority: "medium",
+      actionType: "notify",
+    })) satisfies WorkspaceSuggestionDraft[];
+  }
+
+  const response = await fetch(`${OPENAI_BASE}/responses`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.openAiApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-5-mini",
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                "You are AEGIS, a proactive AI business operator.",
+                `Workspace: ${input.workspace.name}. Industry: ${input.workspace.industry}.`,
+                `Run mode: ${input.mode}.`,
+                "Given these issues, generate concise operational suggestions.",
+                "Return valid JSON only as an array with up to 5 items.",
+                "Each item must follow this schema: { issueType: string, title: string, description: string, suggestedAction: string, priority: 'low'|'medium'|'high', actionType?: 'notify'|'create_task'|'send_sms'|'call_customer'|'update_website'|'bulk_update'|'none' }.",
+                "Use risky action types only when clearly justified.",
+              ].join(" "),
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: JSON.stringify(input.issues),
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  const payload = await parseJsonResponse<{
+    output_text?: string;
+    output?: Array<{
+      type?: string;
+      content?: Array<{
+        type?: string;
+        text?: string;
+      }>;
+    }>;
+  }>(response);
+
+  const parsed = safeJsonParse<WorkspaceSuggestionDraft[]>(extractResponseText(payload));
+  if (!Array.isArray(parsed)) {
+    throw new AppError("OpenAI returned unreadable workspace suggestions.", {
+      code: "OPENAI_BAD_SUGGESTION_PAYLOAD",
+      status: 502,
+    });
+  }
+
+  return parsed.slice(0, 5);
+}
+
+export async function generateDailyWorkspaceSummary(input: {
+  workspace: Workspace;
+  leadsNeedingFollowUp: number;
+  overdueTasks: number;
+  pendingApprovals: number;
+}) {
+  const config = requireOpenAiConfig();
+
+  if (config.demoMode) {
+    return [
+      `Leads needing follow-up: ${input.leadsNeedingFollowUp}.`,
+      `Overdue tasks: ${input.overdueTasks}.`,
+      `Pending approvals: ${input.pendingApprovals}.`,
+    ].join(" ");
+  }
+
+  const response = await fetch(`${OPENAI_BASE}/responses`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.openAiApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-5-mini",
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Summarise today's priorities for this business in 3-5 short bullet points.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: JSON.stringify({
+                workspace: input.workspace.name,
+                leadsNeedingFollowUp: input.leadsNeedingFollowUp,
+                overdueTasks: input.overdueTasks,
+                pendingApprovals: input.pendingApprovals,
+              }),
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  const payload = await parseJsonResponse<{
+    output_text?: string;
+    output?: Array<{
+      type?: string;
+      content?: Array<{
+        type?: string;
+        text?: string;
+      }>;
+    }>;
+  }>(response);
+  const text = extractResponseText(payload).trim();
+  if (!text) {
+    throw new AppError("OpenAI returned an empty daily summary.", {
+      code: "OPENAI_EMPTY_DAILY_SUMMARY",
+      status: 502,
+    });
+  }
+
+  return text;
 }

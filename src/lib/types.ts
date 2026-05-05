@@ -214,6 +214,36 @@ export type ScheduledJob = {
   requiresApproval: boolean;
 };
 
+export type Suggestion = {
+  id: string;
+  workspaceId: string;
+  type: string;
+  title: string;
+  description: string;
+  suggestedAction: string;
+  priority: "low" | "medium" | "high";
+  status: "pending" | "accepted" | "dismissed";
+  linkedEntityId?: string;
+  createdAt: string;
+};
+
+export type NotificationItem = {
+  id: string;
+  workspaceId: string;
+  message: string;
+  type: string;
+  read: boolean;
+  createdAt: string;
+};
+
+export type WorkspaceSummary = {
+  id: string;
+  workspaceId: string;
+  kind: "daily";
+  content: string;
+  createdAt: string;
+};
+
 export type JobRunLog = {
   id: string;
   workspaceId: string;
@@ -247,6 +277,9 @@ export type Snapshot = {
   integrationSettings: IntegrationSetting[];
   scheduledJobs: ScheduledJob[];
   jobRuns: JobRunLog[];
+  suggestions: Suggestion[];
+  notifications: NotificationItem[];
+  workspaceSummaries: WorkspaceSummary[];
 };
 
 export type AgentResult = {

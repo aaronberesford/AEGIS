@@ -13,11 +13,14 @@ import {
   type JobRunLog,
   type Lead,
   type Message,
+  type NotificationItem,
   type Snapshot,
   type ScheduledJob,
+  type Suggestion,
   type TaskItem,
   type ToolCall,
   type Workspace,
+  type WorkspaceSummary,
   type IntegrationSetting,
 } from "@/lib/types";
 
@@ -496,6 +499,18 @@ function seedJobRuns(): JobRunLog[] {
   ];
 }
 
+function seedSuggestions(): Suggestion[] {
+  return [];
+}
+
+function seedNotifications(): NotificationItem[] {
+  return [];
+}
+
+function seedWorkspaceSummaries(): WorkspaceSummary[] {
+  return [];
+}
+
 function createSnapshot(): Snapshot {
   return {
     user: {
@@ -519,6 +534,9 @@ function createSnapshot(): Snapshot {
     integrationSettings: seedIntegrationSettings(),
     scheduledJobs: seedScheduledJobs(),
     jobRuns: seedJobRuns(),
+    suggestions: seedSuggestions(),
+    notifications: seedNotifications(),
+    workspaceSummaries: seedWorkspaceSummaries(),
   };
 }
 
@@ -667,6 +685,31 @@ export function addJobRun(run: JobRunLog) {
   const snapshot = state();
   snapshot.jobRuns.unshift(run);
   return run;
+}
+
+export function addSuggestion(suggestion: Suggestion) {
+  const snapshot = state();
+  snapshot.suggestions.unshift(suggestion);
+  return suggestion;
+}
+
+export function addNotification(notification: NotificationItem) {
+  const snapshot = state();
+  snapshot.notifications.unshift(notification);
+  return notification;
+}
+
+export function upsertWorkspaceSummary(summary: WorkspaceSummary) {
+  const snapshot = state();
+  const index = snapshot.workspaceSummaries.findIndex(
+    (entry) => entry.workspaceId === summary.workspaceId && entry.kind === summary.kind,
+  );
+  if (index >= 0) {
+    snapshot.workspaceSummaries[index] = summary;
+  } else {
+    snapshot.workspaceSummaries.unshift(summary);
+  }
+  return summary;
 }
 
 export function updateAutomation(

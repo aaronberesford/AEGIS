@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 
+import { ensureCronStarted } from "@/lib/cron/start";
 import { processAgentTurn } from "@/lib/agent-runtime";
 import { toErrorResponse } from "@/lib/errors";
 
 export async function POST(request: Request) {
   try {
+    ensureCronStarted();
     const body = (await request.json()) as {
       workspaceId?: string;
       userId?: string;
