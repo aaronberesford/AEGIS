@@ -11,6 +11,7 @@ import {
   workspaceById,
 } from "@/lib/repository";
 import {
+  buildVoiceAudioUrl,
   createVoiceSession,
   decodeVoiceState,
   encodeVoiceState,
@@ -46,18 +47,29 @@ function gatherReply(state: VoiceSessionState, message: string) {
     action: actionUrl(state),
     method: "POST",
     speechTimeout: "auto",
+    timeout: 1,
     hints:
       "buy,sell,forklift,electric,diesel,LPG,Toyota,Linde,Hyster,Doosan,Jungheinrich,model,capacity,mast",
     actionOnEmptyResult: true,
   });
 
-  gather.say({ voice: "alice" }, message);
+  if (env().demoMode) {
+    gather.say({ voice: "alice" }, message);
+  } else {
+    gather.play(buildVoiceAudioUrl({ workspaceId: state.workspaceId, text: message }));
+  }
   return xmlResponse(twiml);
 }
 
-function sayAndHangup(message: string) {
+function sayAndHangup(workspaceId: string, message: string) {
   const twiml = new VoiceResponse();
-  twiml.say({ voice: "alice" }, message);
+
+  if (env().demoMode) {
+    twiml.say({ voice: "alice" }, message);
+  } else {
+    twiml.play(buildVoiceAudioUrl({ workspaceId, text: message }));
+  }
+
   twiml.hangup();
   return xmlResponse(twiml);
 }
@@ -183,7 +195,7 @@ async function handleVoice(request: Request) {
         summary: decision.summary,
         direction,
       });
-      return sayAndHangup(decision.reply);
+      return sayAndHangup(workspace.id, decision.reply);
     }
 
     return gatherReply(next, decision.reply);
@@ -208,7 +220,7 @@ async function handleVoice(request: Request) {
       summary: decision.summary,
       direction,
     });
-    return sayAndHangup(decision.reply);
+    return sayAndHangup(workspace.id, decision.reply);
   }
 
   return gatherReply(next, decision.reply);
@@ -219,7 +231,10 @@ export async function GET(request: Request) {
     return await handleVoice(request);
   } catch (error) {
     const response = toErrorResponse(error);
-    return sayAndHangup(response.body.error ?? "Sorry, the AEGIS phone agent hit an error.");
+    return sayAndHangup(
+      "voice_fallback",
+      response.body.error ?? "Sorry, the AEGIS phone agent hit an error.",
+    );
   }
 }
 
@@ -228,6 +243,9 @@ export async function POST(request: Request) {
     return await handleVoice(request);
   } catch (error) {
     const response = toErrorResponse(error);
-    return sayAndHangup(response.body.error ?? "Sorry, the AEGIS phone agent hit an error.");
+    return sayAndHangup(
+      "voice_fallback",
+      response.body.error ?? "Sorry, the AEGIS phone agent hit an error.",
+    );
   }
 }

@@ -200,7 +200,19 @@ export async function transcribeAudio(file: Blob) {
   return payload.text;
 }
 
-export async function synthesizeSpeech(text: string, voice = "alloy") {
+type SpeechFormat = "mp3" | "wav" | "opus" | "aac" | "flac" | "pcm";
+
+type SpeechOptions = {
+  voice?: string;
+  format?: SpeechFormat;
+  instructions?: string;
+  model?: string;
+};
+
+export async function synthesizeSpeechBuffer(
+  text: string,
+  options: SpeechOptions = {},
+) {
   const config = requireOpenAiConfig();
 
   if (config.demoMode) {
@@ -214,10 +226,11 @@ export async function synthesizeSpeech(text: string, voice = "alloy") {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: config.openAiSpeechModel,
-      voice,
+      model: options.model ?? config.openAiSpeechModel,
+      voice: options.voice ?? "alloy",
       input: text,
-      format: "mp3",
+      format: options.format ?? "mp3",
+      instructions: options.instructions,
     }),
   });
 
@@ -229,7 +242,16 @@ export async function synthesizeSpeech(text: string, voice = "alloy") {
     });
   }
 
-  const bytes = Buffer.from(await response.arrayBuffer());
+  return Buffer.from(await response.arrayBuffer());
+}
+
+export async function synthesizeSpeech(text: string, voice = "alloy") {
+  const bytes = await synthesizeSpeechBuffer(text, { voice, format: "mp3" });
+
+  if (!bytes) {
+    return null;
+  }
+
   return bytes.toString("base64");
 }
 

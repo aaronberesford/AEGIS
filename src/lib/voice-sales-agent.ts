@@ -9,7 +9,7 @@ import { type Workspace } from "@/lib/types";
 const OPENAI_BASE = "https://api.openai.com/v1";
 const MAX_TURNS = 8;
 const MAX_HISTORY_MESSAGES = 8;
-const MAX_MESSAGE_LENGTH = 220;
+const MAX_MESSAGE_LENGTH = 180;
 
 type CallIntent = "buy" | "sell" | "unknown";
 type CallMode = "inbound" | "outbound";
@@ -31,6 +31,11 @@ export type VoiceSessionState = {
   summary?: string;
   stage?: string;
   outboundContext?: string;
+};
+
+type VoiceAudioPayload = {
+  text: string;
+  workspaceId: string;
 };
 
 type VoiceDecision = {
@@ -364,7 +369,8 @@ async function liveDecision(
                 `You are AEGIS, a phone sales agent for ${workspace.name}.`,
                 `Industry: ${workspace.industry}. Tone: ${workspace.toneOfVoice}.`,
                 "You are on a live Twilio phone call, so sound natural, warm and concise.",
-                "Keep every spoken reply under 45 words and ask only one main question at a time.",
+                "Keep every spoken reply under 28 words and ask only one main question at a time.",
+                "Use direct phrasing with no fluff so each turn is fast.",
                 "The caller is speaking to a forklift dealership and remarketing desk.",
                 "First priority is to determine whether the caller wants to buy or sell a forklift truck.",
                 "If buying, qualify power type, load capacity, lift height, budget, timing and location, then recommend only from the inventory below.",
@@ -442,15 +448,15 @@ export function openingLine(workspace: Workspace, state: VoiceSessionState) {
   if (workspace.industry.toLowerCase().includes("material")) {
     if (state.mode === "outbound") {
       const context = state.outboundContext
-        ? `${compactText(state.outboundContext, 90)} `
+        ? `${compactText(state.outboundContext, 70)} `
         : "";
       return compactText(
-        `Hello, this is AEGIS calling from ${workspace.name}. ${context}Are you looking to buy or sell any forklift trucks today?`,
-        210,
+        `Hello, this is AEGIS, the AI assistant at ${workspace.name}. ${context}Are you looking to buy or sell a forklift today?`,
+        150,
       );
     }
 
-    return `Hello, you've reached ${workspace.name}. Are you looking to buy a forklift truck, or sell one into stock today?`;
+    return `Hello, this is AEGIS, the AI assistant at ${workspace.name}. Are you looking to buy a forklift, or sell one into stock today?`;
   }
 
   return `Hello, you've reached ${workspace.name}. How can I help you today?`;
@@ -487,6 +493,43 @@ export function buildVoiceWebhookUrl(input: {
   const state = createVoiceSession(input);
   url.searchParams.set("state", encodeVoiceState(state));
   return url.toString();
+}
+
+export function britishVoiceInstructions(workspace: Workspace) {
+  return [
+    "Speak in clear British English.",
+    `Sound like a warm, confident AI sales assistant for ${workspace.name}.`,
+    "Keep a natural pace and avoid sounding robotic.",
+    "Use short, crisp phrasing suitable for a live phone call.",
+  ].join(" ");
+}
+
+export function buildVoiceAudioUrl(input: VoiceAudioPayload) {
+  const payload = JSON.stringify({
+    workspaceId: input.workspaceId,
+    text: compactText(input.text, 220),
+  } satisfies VoiceAudioPayload);
+  const url = new URL("/api/twilio/voice-audio", env().appUrl);
+  url.searchParams.set("payload", base64UrlEncode(payload));
+  url.searchParams.set("sig", signPayload(payload));
+  return url.toString();
+}
+
+export function decodeVoiceAudioPayload(payload: string | null, sig: string | null) {
+  if (!payload || !sig) {
+    return null;
+  }
+
+  const decoded = base64UrlDecode(payload);
+  if (signPayload(decoded) !== sig) {
+    return null;
+  }
+
+  const parsed = JSON.parse(decoded) as VoiceAudioPayload;
+  return {
+    workspaceId: String(parsed.workspaceId),
+    text: compactText(String(parsed.text ?? ""), 220),
+  } satisfies VoiceAudioPayload;
 }
 
 export function encodeVoiceState(state: VoiceSessionState) {
