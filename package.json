@@ -6,6 +6,7 @@
     "dev": "next dev",
     "dev:voice": "node scripts/dev-voice.mjs",
     "voice:bridge": "node --env-file=.env.local server/twilio-realtime-bridge.mjs",
+    "voice:bridge:prod": "node server/twilio-realtime-bridge.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

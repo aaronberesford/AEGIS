@@ -53,10 +53,7 @@ For the lowest-latency phone experience, AEGIS can stream Twilio call audio dire
 1. Set these in `.env.local`:
    - `TWILIO_REALTIME_ENABLED=true`
    - `OPENAI_REALTIME_MODEL=gpt-realtime-1.5`
-   - `OPENAI_REALTIME_VOICE=marin`
-   - `OPENAI_PHONE_VOICE=marin`
-   - `OPENAI_REALTIME_TURN_MODE=semantic_vad`
-   - `OPENAI_REALTIME_TURN_EAGERNESS=low`
+   - `OPENAI_REALTIME_VOICE=cedar`
    - `TWILIO_MEDIA_STREAM_URL=wss://your-public-domain/media-stream`
    - `TWILIO_MEDIA_STREAM_PORT=3001`
 2. Make sure your public tunnel routes `/media-stream` to local port `3001`
@@ -67,6 +64,83 @@ npm run dev:voice
 ```
 
 If the realtime bridge is disabled, the app falls back to the clip-based OpenAI TTS phone route.
+
+## Production deploy
+
+For reliable public calling and SMS, split the stack:
+
+- Vercel hosts the Next.js app
+- Render hosts the Twilio realtime voice bridge
+
+### 1. Deploy the app to Vercel
+
+Deploy this Next.js app to Vercel from GitHub.
+
+Set these environment variables in Vercel:
+
+- `DEMO_MODE=false`
+- `NEXT_PUBLIC_APP_URL=https://aegis.yourdomain.com`
+- `OPENAI_API_KEY=...`
+- `OPENAI_MODEL=gpt-5-mini`
+- `OPENAI_SPEECH_MODEL=gpt-4o-mini-tts`
+- `TWILIO_ACCOUNT_SID=...`
+- `TWILIO_AUTH_TOKEN=...`
+- `TWILIO_PHONE_NUMBER=+447367172076`
+- `TWILIO_REALTIME_ENABLED=true`
+- `TWILIO_MEDIA_STREAM_URL=wss://voice.yourdomain.com/media-stream`
+- `SUPABASE_URL=...`
+- `SUPABASE_SERVICE_ROLE_KEY=...`
+
+### 2. Deploy the voice bridge to Render
+
+This repo includes [render.yaml](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/render.yaml) for the voice bridge service.
+
+Render service details:
+
+- service type: `Web Service`
+- runtime: `Node`
+- build command: `npm ci`
+- start command: `npm run voice:bridge:prod`
+- health check: `/health`
+
+Set these environment variables in Render:
+
+- `OPENAI_API_KEY=...`
+- `OPENAI_REALTIME_MODEL=gpt-realtime-1.5`
+- `OPENAI_REALTIME_VOICE=cedar`
+
+Render will provide:
+
+- `PORT`
+- public HTTPS domain such as `https://aegis-voice-bridge.onrender.com`
+
+Use that Render domain to form the media stream URL:
+
+- `wss://aegis-voice-bridge.onrender.com/media-stream`
+
+### 3. Wire Twilio to the public app
+
+On your Twilio number:
+
+- Voice webhook:
+  - `https://aegis.yourdomain.com/api/twilio/voice-script`
+  - method: `POST`
+- Messaging webhook:
+  - `https://aegis.yourdomain.com/api/twilio/sms`
+  - method: `POST`
+
+The Next.js app will return TwiML that tells Twilio to connect the call audio to the Render-hosted realtime bridge over WebSocket.
+
+### 4. DNS layout
+
+Recommended:
+
+- `aegis.yourdomain.com` -> Vercel app
+- `voice.yourdomain.com` -> Render voice bridge
+
+### 5. Important note
+
+This repo currently has no Git remote configured, so deployment cannot start until you push it to GitHub, GitLab, or Bitbucket.
 
 ## Supabase persistence setup
 
