@@ -33,6 +33,50 @@ function xmlResponse(twiml: InstanceType<typeof VoiceResponse>) {
   });
 }
 
+function escapeXml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function realtimeStreamResponse(input: {
+  workspaceId: string;
+  workspaceName: string;
+  leadId?: string;
+  contactPhone?: string;
+  mode: "inbound" | "outbound";
+  outboundContext?: string;
+}) {
+  const params = [
+    ["workspaceId", input.workspaceId],
+    ["workspaceName", input.workspaceName],
+    ["mode", input.mode],
+    ["leadId", input.leadId ?? ""],
+    ["contactPhone", input.contactPhone ?? ""],
+    ["outboundContext", input.outboundContext ?? ""],
+  ]
+    .filter(([, value]) => value)
+    .map(
+      ([name, value]) =>
+        `<Parameter name="${escapeXml(name)}" value="${escapeXml(value)}" />`,
+    )
+    .join("");
+
+  return new Response(
+    `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="${escapeXml(
+      env().twilioMediaStreamUrl,
+    )}">${params}</Stream></Connect></Response>`,
+    {
+      headers: {
+        "Content-Type": "text/xml",
+      },
+    },
+  );
+}
+
 function actionUrl(state: VoiceSessionState) {
   return `${env().appUrl}/api/twilio/voice-script?state=${encodeURIComponent(
     encodeVoiceState(state),
@@ -121,6 +165,8 @@ async function handleVoice(request: Request) {
   const callSid = String(formData.get("CallSid") ?? url.searchParams.get("CallSid") ?? "");
   const to = String(formData.get("To") ?? url.searchParams.get("To") ?? "");
   const from = String(formData.get("From") ?? url.searchParams.get("From") ?? "");
+  const speechResult = String(formData.get("SpeechResult") ?? "");
+  const digits = String(formData.get("Digits") ?? "");
   const direction = directionMode(
     String(formData.get("Direction") ?? url.searchParams.get("Direction") ?? "inbound"),
   );
@@ -148,7 +194,10 @@ async function handleVoice(request: Request) {
       outboundContext: url.searchParams.get("script") ?? undefined,
     });
 
-  if (!state) {
+  const isRealtimeBootstrap =
+    env().twilioRealtimeEnabled && !speechResult.trim() && !digits.trim();
+
+  if (!state || isRealtimeBootstrap) {
     await logCallActivity({
       workspaceId: workspace.id,
       leadId: lead?.id,
@@ -159,9 +208,20 @@ async function handleVoice(request: Request) {
     });
   }
 
+  if (isRealtimeBootstrap) {
+    return realtimeStreamResponse({
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      leadId: lead?.id,
+      contactPhone,
+      mode: direction,
+      outboundContext: activeState.outboundContext,
+    });
+  }
+
   const utterance = utteranceFromTwilio({
-    speechResult: String(formData.get("SpeechResult") ?? ""),
-    digits: String(formData.get("Digits") ?? ""),
+    speechResult,
+    digits,
   });
 
   if (!utterance) {

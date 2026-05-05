@@ -11,7 +11,7 @@ import {
   decodeVoiceAudioPayload,
 } from "@/lib/voice-sales-agent";
 
-const DEFAULT_VOICE = "verse";
+const DEFAULT_VOICE = "alloy";
 const CACHE_DIR = path.join(os.tmpdir(), "aegis-voice-cache");
 
 async function cachePath(key: string) {

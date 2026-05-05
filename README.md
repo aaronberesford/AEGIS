@@ -46,6 +46,25 @@ npm run dev
 
 5. Open [http://localhost:3000](http://localhost:3000).
 
+## Realtime phone voice
+
+For the lowest-latency phone experience, AEGIS can stream Twilio call audio directly into OpenAI Realtime.
+
+1. Set these in `.env.local`:
+   - `TWILIO_REALTIME_ENABLED=true`
+   - `OPENAI_REALTIME_MODEL=gpt-realtime-1.5`
+   - `OPENAI_REALTIME_VOICE=cedar`
+   - `TWILIO_MEDIA_STREAM_URL=wss://your-public-domain/media-stream`
+   - `TWILIO_MEDIA_STREAM_PORT=3001`
+2. Make sure your public tunnel routes `/media-stream` to local port `3001`
+3. Start both the Next app and the realtime bridge:
+
+```bash
+npm run dev:voice
+```
+
+If the realtime bridge is disabled, the app falls back to the clip-based OpenAI TTS phone route.
+
 ## Supabase persistence setup
 
 When you are ready to persist real data:
