@@ -54,6 +54,7 @@ For the lowest-latency phone experience, AEGIS can stream Twilio call audio dire
    - `TWILIO_REALTIME_ENABLED=true`
    - `OPENAI_REALTIME_MODEL=gpt-realtime-1.5`
    - `OPENAI_REALTIME_VOICE=marin`
+   - `OPENAI_PHONE_VOICE=marin`
    - `OPENAI_REALTIME_TURN_MODE=semantic_vad`
    - `OPENAI_REALTIME_TURN_EAGERNESS=low`
    - `TWILIO_MEDIA_STREAM_URL=wss://your-public-domain/media-stream`

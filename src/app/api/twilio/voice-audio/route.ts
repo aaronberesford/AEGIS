@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { env } from "@/lib/env";
 import { toErrorResponse } from "@/lib/errors";
 import { synthesizeSpeechBuffer } from "@/lib/services/openai";
 import { workspaceById } from "@/lib/repository";
@@ -11,7 +13,6 @@ import {
   decodeVoiceAudioPayload,
 } from "@/lib/voice-sales-agent";
 
-const DEFAULT_VOICE = "alloy";
 const CACHE_DIR = path.join(os.tmpdir(), "aegis-voice-cache");
 
 async function cachePath(key: string) {
@@ -31,6 +32,13 @@ async function getCachedAudio(key: string) {
 async function setCachedAudio(key: string, bytes: Buffer) {
   const filePath = await cachePath(key);
   await fs.writeFile(filePath, bytes);
+}
+
+function cacheKeyFor(input: { sig: string; voice: string; instructions: string }) {
+  return crypto
+    .createHash("sha256")
+    .update(`${input.sig}:${input.voice}:${input.instructions}`)
+    .digest("hex");
 }
 
 async function synthesizeWithRetry(
@@ -73,12 +81,8 @@ export async function GET(request: Request) {
     }
 
     const workspace = await workspaceById(payload.workspaceId);
-    const preferredVoice =
-      workspace?.voice.name && workspace.voice.name !== "alloy"
-        ? workspace.voice.name
-        : DEFAULT_VOICE;
+    const phoneVoice = env().openAiPhoneVoice;
 
-    const key = searchParams.get("sig") ?? "voice";
     const fallbackWorkspace =
       workspace ?? {
         id: payload.workspaceId,
@@ -95,20 +99,22 @@ export async function GET(request: Request) {
         businessHours: "",
         approvalPolicy: "",
         voice: {
-          name: preferredVoice,
+          name: phoneVoice,
           speed: 1,
           style: "British",
         },
       };
+    const instructions = britishVoiceInstructions(fallbackWorkspace);
+    const key = cacheKeyFor({
+      sig: searchParams.get("sig") ?? "voice",
+      voice: phoneVoice,
+      instructions,
+    });
 
     const cached = await getCachedAudio(key);
     const audio =
       cached ??
-      (await synthesizeWithRetry(
-        payload.text,
-        preferredVoice,
-        britishVoiceInstructions(fallbackWorkspace),
-      ));
+      (await synthesizeWithRetry(payload.text, phoneVoice, instructions));
 
     if (!audio) {
       return NextResponse.json({ error: "Speech audio unavailable in demo mode." }, { status: 400 });

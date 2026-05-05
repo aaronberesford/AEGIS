@@ -497,11 +497,12 @@ export function buildVoiceWebhookUrl(input: {
 
 export function britishVoiceInstructions(workspace: Workspace) {
   return [
-    "Speak in polished, natural British English.",
+    "Speak in polished, natural British English for a phone call.",
     `Sound like a warm, capable customer service assistant for ${workspace.name}.`,
-    "Use subtle British cadence and pronunciation where possible.",
-    "Avoid exaggerated cheerfulness, robotic emphasis, or overly sharp pacing.",
-    "Keep each line crisp, conversational, and phone-friendly.",
+    "Use subtle British cadence and a calm, grounded delivery.",
+    "Avoid robotic emphasis, announcer energy, harsh consonants, or rushed pacing.",
+    "Leave very small natural pauses between clauses and sentences.",
+    "Keep each line conversational, warm, and easy to understand on a phone line.",
   ].join(" ");
 }
 

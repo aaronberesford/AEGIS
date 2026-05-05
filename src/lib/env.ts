@@ -11,6 +11,7 @@ export function env() {
     openAiApiKey: process.env.OPENAI_API_KEY ?? "",
     openAiModel: process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
     openAiSpeechModel: process.env.OPENAI_SPEECH_MODEL ?? "gpt-4o-mini-tts",
+    openAiPhoneVoice: process.env.OPENAI_PHONE_VOICE ?? "marin",
     openAiRealtimeModel: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-1.5",
     openAiRealtimeVoice: process.env.OPENAI_REALTIME_VOICE ?? "marin",
     twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? "",
