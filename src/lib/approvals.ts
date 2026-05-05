@@ -9,9 +9,9 @@ import {
   resolveApproval,
   workspaceById,
 } from "@/lib/repository";
-import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
 import { placeTwilioCall, sendTwilioSms } from "@/lib/services/twilio";
+import { buildVoiceWebhookUrl } from "@/lib/voice-sales-agent";
 
 function isWithinBusinessHours(value: string) {
   const match = value.match(/(\d{2}):(\d{2})-(\d{2}):(\d{2})/);
@@ -117,8 +117,13 @@ export async function executeApproval(approvalId: string) {
         });
       }
 
-      const script = encodeURIComponent(approval.message);
-      const twimlUrl = `${env().appUrl}/api/twilio/voice-script?script=${script}`;
+      const twimlUrl = buildVoiceWebhookUrl({
+        workspaceId: approval.workspaceId,
+        mode: "outbound",
+        leadId: approval.metadata?.leadId,
+        contactPhone: phone,
+        outboundContext: approval.message,
+      });
       const result = await placeTwilioCall(phone, twimlUrl);
       await addToolCall({
         workspaceId: approval.workspaceId,

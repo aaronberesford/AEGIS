@@ -821,6 +821,18 @@ export async function findPrimaryLeadForWorkspace(workspaceId: string) {
   );
 }
 
+export async function findLeadByPhone(workspaceId: string, phoneNumber: string) {
+  const normalize = (value: string) => value.replace(/[^\d+]/g, "");
+  const snapshot = await getSnapshot(workspaceId);
+  return (
+    snapshot.leads.find(
+      (lead) =>
+        lead.workspaceId === workspaceId &&
+        normalize(lead.phone) === normalize(phoneNumber),
+    ) ?? null
+  );
+}
+
 export async function findCrmMatches(workspaceId: string, query: string) {
   const snapshot = await getSnapshot(workspaceId);
   const needle = query.toLowerCase();
@@ -1190,6 +1202,7 @@ export async function logCallActivity(input: {
   status: string;
   summary: string;
   outcome?: string;
+  direction?: "inbound" | "outbound";
 }) {
   if (env().demoMode) {
     demoStore.addCrmTimelineItem({
@@ -1197,7 +1210,7 @@ export async function logCallActivity(input: {
       workspaceId: input.workspaceId,
       leadId: input.leadId,
       type: "call",
-      title: "Call made",
+      title: input.direction === "inbound" ? "Call received" : "Call made",
       detail: input.summary,
       timestamp: new Date().toISOString(),
     });
@@ -1208,7 +1221,7 @@ export async function logCallActivity(input: {
   const inserted = await supabase.from("call_logs").insert({
     workspace_id: input.workspaceId,
     lead_id: input.leadId ?? null,
-    direction: "outbound",
+    direction: input.direction ?? "outbound",
     status: input.status,
     summary: input.summary,
     outcome: input.outcome ?? null,
