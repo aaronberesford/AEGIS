@@ -6,7 +6,14 @@ const PORT = Number(process.env.TWILIO_MEDIA_STREAM_PORT ?? "3001");
 const PATHNAME = "/media-stream";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-1.5";
-const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE ?? "cedar";
+const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE ?? "marin";
+const TURN_MODE = process.env.OPENAI_REALTIME_TURN_MODE ?? "semantic_vad";
+const TURN_EAGERNESS = process.env.OPENAI_REALTIME_TURN_EAGERNESS ?? "low";
+const TURN_THRESHOLD = Number(process.env.OPENAI_REALTIME_TURN_THRESHOLD ?? "0.6");
+const TURN_PREFIX_PADDING_MS = Number(
+  process.env.OPENAI_REALTIME_TURN_PREFIX_PADDING_MS ?? "450",
+);
+const TURN_SILENCE_MS = Number(process.env.OPENAI_REALTIME_TURN_SILENCE_MS ?? "900");
 
 if (!OPENAI_API_KEY) {
   console.error("Missing OPENAI_API_KEY for Twilio realtime bridge.");
@@ -24,10 +31,12 @@ const inventory = [
 function buildInstructions(workspaceName, outboundContext = "") {
   return [
     `You are AEGIS, the live AI phone assistant for ${workspaceName}.`,
-    "Speak in natural British English with a calm, polished customer service tone.",
-    "Sound conversational and human, not robotic.",
-    "Keep replies very short, usually one sentence and under 20 words.",
+    "Speak in warm, natural British English with a polished but relaxed customer service tone.",
+    "Sound conversational and human, never robotic, rushed, or over-enunciated.",
+    "Keep replies very short, usually one sentence and under 16 words.",
     "Ask only one question at a time.",
+    "Leave natural pauses and do not rush into a second sentence.",
+    "If the caller is still speaking or thinking, wait rather than jumping in.",
     "The caller is talking to a forklift dealership and remarketing desk.",
     "Start by finding out whether they want to buy a forklift or sell one.",
     "If buying, ask for power type, lift capacity, lift height, budget, timing and location, then recommend matching stock only from this inventory.",
@@ -40,6 +49,26 @@ function buildInstructions(workspaceName, outboundContext = "") {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildTurnDetection() {
+  if (TURN_MODE === "server_vad") {
+    return {
+      type: "server_vad",
+      threshold: TURN_THRESHOLD,
+      prefix_padding_ms: TURN_PREFIX_PADDING_MS,
+      silence_duration_ms: TURN_SILENCE_MS,
+      create_response: true,
+      interrupt_response: true,
+    };
+  }
+
+  return {
+    type: "semantic_vad",
+    eagerness: TURN_EAGERNESS,
+    create_response: true,
+    interrupt_response: true,
+  };
 }
 
 function initialPrompt(workspaceName, outboundContext = "") {
@@ -85,6 +114,7 @@ wss.on("connection", (twilioWs) => {
   let streamSid = null;
   let sessionReady = false;
   let startedGreeting = false;
+  let assistantSpeaking = false;
   let callInfo = {
     workspaceName: "Forklift Pro Solutions",
     outboundContext: "",
@@ -127,11 +157,11 @@ wss.on("connection", (twilioWs) => {
         type: "realtime",
         model: REALTIME_MODEL,
         instructions: buildInstructions(callInfo.workspaceName, callInfo.outboundContext),
+        turn_detection: buildTurnDetection(),
         output_modalities: ["audio"],
         audio: {
           input: {
             format: { type: "audio/pcmu" },
-            turn_detection: { type: "server_vad" },
           },
           output: {
             format: { type: "audio/pcmu" },
@@ -157,6 +187,7 @@ wss.on("connection", (twilioWs) => {
           return;
         }
 
+        assistantSpeaking = true;
         twilioWs.send(
           JSON.stringify({
             event: "media",
@@ -167,10 +198,21 @@ wss.on("connection", (twilioWs) => {
         return;
       }
 
-      if (event.type === "input_audio_buffer.speech_started" && streamSid) {
+      if (
+        (event.type === "response.output_audio.done" ||
+          event.type === "response.audio.done" ||
+          event.type === "response.done") &&
+        assistantSpeaking
+      ) {
+        assistantSpeaking = false;
+        return;
+      }
+
+      if (event.type === "input_audio_buffer.speech_started" && streamSid && assistantSpeaking) {
         if (twilioWs.readyState === WebSocket.OPEN) {
           twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
         }
+        assistantSpeaking = false;
         sendOpenAi({ type: "response.cancel" });
       }
     } catch (error) {
@@ -211,10 +253,10 @@ wss.on("connection", (twilioWs) => {
                 callInfo.workspaceName,
                 callInfo.outboundContext,
               ),
+              turn_detection: buildTurnDetection(),
               audio: {
                 input: {
                   format: { type: "audio/pcmu" },
-                  turn_detection: { type: "server_vad" },
                 },
                 output: {
                   format: { type: "audio/pcmu" },

@@ -53,7 +53,9 @@ For the lowest-latency phone experience, AEGIS can stream Twilio call audio dire
 1. Set these in `.env.local`:
    - `TWILIO_REALTIME_ENABLED=true`
    - `OPENAI_REALTIME_MODEL=gpt-realtime-1.5`
-   - `OPENAI_REALTIME_VOICE=cedar`
+   - `OPENAI_REALTIME_VOICE=marin`
+   - `OPENAI_REALTIME_TURN_MODE=semantic_vad`
+   - `OPENAI_REALTIME_TURN_EAGERNESS=low`
    - `TWILIO_MEDIA_STREAM_URL=wss://your-public-domain/media-stream`
    - `TWILIO_MEDIA_STREAM_PORT=3001`
 2. Make sure your public tunnel routes `/media-stream` to local port `3001`
