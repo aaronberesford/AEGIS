@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { toErrorResponse } from "@/lib/errors";
 import { synthesizeSpeechBuffer } from "@/lib/services/openai";
@@ -9,6 +12,53 @@ import {
 } from "@/lib/voice-sales-agent";
 
 const DEFAULT_VOICE = "verse";
+const CACHE_DIR = path.join(os.tmpdir(), "aegis-voice-cache");
+
+async function cachePath(key: string) {
+  await fs.mkdir(CACHE_DIR, { recursive: true });
+  return path.join(CACHE_DIR, `${key}.mp3`);
+}
+
+async function getCachedAudio(key: string) {
+  try {
+    const filePath = await cachePath(key);
+    return await fs.readFile(filePath);
+  } catch {
+    return null;
+  }
+}
+
+async function setCachedAudio(key: string, bytes: Buffer) {
+  const filePath = await cachePath(key);
+  await fs.writeFile(filePath, bytes);
+}
+
+async function synthesizeWithRetry(
+  text: string,
+  voice: string,
+  instructions: string,
+) {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const audio = await synthesizeSpeechBuffer(text, {
+        model: "gpt-4o-mini-tts",
+        voice,
+        format: "mp3",
+        instructions,
+      });
+
+      if (audio) {
+        return audio;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Speech synthesis failed.");
+}
 
 export async function GET(request: Request) {
   try {
@@ -28,42 +78,50 @@ export async function GET(request: Request) {
         ? workspace.voice.name
         : DEFAULT_VOICE;
 
-    const audio = await synthesizeSpeechBuffer(payload.text, {
-      model: "gpt-4o-mini-tts",
-      voice: preferredVoice,
-      format: "wav",
-      instructions: britishVoiceInstructions(
-        workspace ?? {
-          id: payload.workspaceId,
-          name: "AEGIS",
-          industry: "Operations",
-          toneOfVoice: "Warm and direct",
-          services: [],
-          targetCustomers: [],
-          twilioNumber: "",
-          openAiModel: "gpt-5-mini",
-          crmProvider: "",
-          emailProvider: "",
-          websiteProvider: "",
-          businessHours: "",
-          approvalPolicy: "",
-          voice: {
-            name: preferredVoice,
-            speed: 1,
-            style: "British",
-          },
+    const key = searchParams.get("sig") ?? "voice";
+    const fallbackWorkspace =
+      workspace ?? {
+        id: payload.workspaceId,
+        name: "AEGIS",
+        industry: "Operations",
+        toneOfVoice: "Warm and direct",
+        services: [],
+        targetCustomers: [],
+        twilioNumber: "",
+        openAiModel: "gpt-5-mini",
+        crmProvider: "",
+        emailProvider: "",
+        websiteProvider: "",
+        businessHours: "",
+        approvalPolicy: "",
+        voice: {
+          name: preferredVoice,
+          speed: 1,
+          style: "British",
         },
-      ),
-    });
+      };
+
+    const cached = await getCachedAudio(key);
+    const audio =
+      cached ??
+      (await synthesizeWithRetry(
+        payload.text,
+        preferredVoice,
+        britishVoiceInstructions(fallbackWorkspace),
+      ));
 
     if (!audio) {
       return NextResponse.json({ error: "Speech audio unavailable in demo mode." }, { status: 400 });
     }
 
+    if (!cached) {
+      await setCachedAudio(key, audio);
+    }
+
     return new Response(audio, {
       headers: {
-        "Content-Type": "audio/wav",
-        "Cache-Control": "no-store, max-age=0",
+        "Content-Type": "audio/mpeg",
+        "Cache-Control": "public, max-age=3600, immutable",
       },
     });
   } catch (error) {
