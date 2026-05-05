@@ -104,6 +104,21 @@ export type CrmTimelineItem = {
   timestamp: string;
 };
 
+export type CallLog = {
+  id: string;
+  workspaceId: string;
+  leadId?: string;
+  direction: "inbound" | "outbound";
+  status: string;
+  summary: string;
+  transcript?: string | null;
+  recordingUrl?: string | null;
+  nextAction?: string | null;
+  callSid?: string | null;
+  createdAt: string;
+  createdAtValue?: string;
+};
+
 export type Automation = {
   id: string;
   workspaceId: string;
@@ -218,6 +233,7 @@ export type Snapshot = {
   tasks: TaskItem[];
   leads: Lead[];
   crmTimeline: CrmTimelineItem[];
+  callLogs: CallLog[];
   automations: Automation[];
   conversations: Conversation[];
   auditLogs: AuditLog[];

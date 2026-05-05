@@ -16,6 +16,7 @@ import {
   type Activity,
   type AuditLog,
   type Automation,
+  type CallLog,
   type Contact,
   type Conversation,
   type CrmTimelineItem,
@@ -413,6 +414,24 @@ function deriveCrmTimeline(input: {
     .slice(0, 30);
 }
 
+function mapCallLog(row: Record<string, unknown>): CallLog {
+  const createdAtValue = String(row.created_at ?? new Date().toISOString());
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    leadId: row.lead_id ? String(row.lead_id) : undefined,
+    direction: String(row.direction ?? "outbound") === "inbound" ? "inbound" : "outbound",
+    status: String(row.status ?? "completed"),
+    summary: String(row.summary ?? "Call activity"),
+    transcript: row.transcript ? String(row.transcript) : null,
+    recordingUrl: row.recording_url ? String(row.recording_url) : null,
+    nextAction: row.next_action ? String(row.next_action) : null,
+    callSid: row.outcome ? String(row.outcome) : null,
+    createdAt: formatStamp(createdAtValue),
+    createdAtValue,
+  };
+}
+
 async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Snapshot> {
   const supabase = getSupabaseAdmin();
 
@@ -678,6 +697,7 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     tasks,
     auditLogs,
   });
+  const callLogs = ((callResponse.data ?? []) as Array<Record<string, unknown>>).map(mapCallLog);
   const userRow = (userResponse.data ?? [])[0] as Record<string, unknown> | undefined;
 
   return {
@@ -694,6 +714,7 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     tasks,
     leads,
     crmTimeline,
+    callLogs,
     automations,
     conversations,
     auditLogs,

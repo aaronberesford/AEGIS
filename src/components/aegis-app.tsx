@@ -2,7 +2,7 @@
 
 import { startTransition, useMemo, useRef, useState } from "react";
 
-import { type Approval, type Lead, type Snapshot } from "@/lib/types";
+import { type Approval, type CallLog, type Lead, type Snapshot } from "@/lib/types";
 import { cn, formatRiskTone } from "@/lib/utils";
 
 type ScreenKey =
@@ -57,6 +57,7 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
   const [integrationState, setIntegrationState] = useState<IntegrationState>({});
   const [editingApproval, setEditingApproval] = useState<ApprovalEditState | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [crmNote, setCrmNote] = useState("");
   const [crmTaskTitle, setCrmTaskTitle] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -89,6 +90,9 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
   const workspaceCrmTimeline = snapshot.crmTimeline.filter(
     (item) => item.workspaceId === currentWorkspace.id,
   );
+  const workspaceCallLogs = snapshot.callLogs.filter(
+    (call) => call.workspaceId === currentWorkspace.id,
+  );
   const workspaceAutomations = snapshot.automations.filter(
     (automation) => automation.workspaceId === currentWorkspace.id,
   );
@@ -108,6 +112,10 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
     .slice(0, 4);
   const selectedLead =
     workspaceLeads.find((lead) => lead.id === selectedLeadId) ?? workspaceLeads[0] ?? null;
+  const selectedCall =
+    workspaceCallLogs.find((call) => call.id === selectedCallId) ??
+    workspaceCallLogs[0] ??
+    null;
 
   const quickActions = useMemo(
     () => [
@@ -1052,14 +1060,58 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
                   {screen === "calls" && (
                     <div className="space-y-3">
                       <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
-                        Outbound calls stay blocked until approval passes and the request is inside business hours.
+                        Outbound calls still require approval, but completed and in-progress calls now show here with summaries and transcripts when available.
                       </div>
+                      {workspaceCallLogs.length === 0 && (
+                        <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
+                          No call history yet for this workspace.
+                        </div>
+                      )}
+                      {workspaceCallLogs.map((call) => (
+                        <button
+                          key={call.id}
+                          onClick={() => setSelectedCallId(call.id)}
+                          className={cn(
+                            "w-full rounded-2xl border bg-white/[0.03] p-4 text-left transition",
+                            selectedCall?.id === call.id
+                              ? "border-[rgba(124,77,255,0.35)]"
+                              : "border-white/8",
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h4 className="text-sm font-semibold text-white">
+                                {call.direction === "inbound" ? "Inbound call" : "Outbound call"}
+                              </h4>
+                              <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                {call.summary}
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-white/[0.06] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                              {call.status}
+                            </span>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between text-xs text-[var(--text-muted)]">
+                            <span>{call.createdAt}</span>
+                            <span>{call.callSid ?? "Awaiting call SID"}</span>
+                          </div>
+                        </button>
+                      ))}
+                      {selectedCall && (
+                        <CallTranscriptPanel
+                          call={selectedCall}
+                          leadName={
+                            workspaceLeads.find((lead) => lead.id === selectedCall.leadId)?.name ??
+                            "Unknown lead"
+                          }
+                        />
+                      )}
                       {workspaceApprovals
                         .filter((approval) => approval.type === "make_call")
                         .map((approval) => (
                           <article
                             key={approval.id}
-                            className="rounded-2xl border border-white/8 bg-white/[0.03] p-4"
+                            className="rounded-2xl border border-[rgba(124,77,255,0.22)] bg-[rgba(124,77,255,0.12)] p-4"
                           >
                             <h4 className="text-sm font-semibold text-white">{approval.title}</h4>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
@@ -1475,6 +1527,63 @@ export function AegisApp({ initialSnapshot }: { initialSnapshot: Snapshot }) {
         </section>
       </div>
     </main>
+  );
+}
+
+function CallTranscriptPanel({
+  call,
+  leadName,
+}: {
+  call: CallLog;
+  leadName: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-[rgba(124,77,255,0.28)] bg-[rgba(18,12,37,0.9)] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-lg font-semibold text-white">
+            {call.direction === "inbound" ? "Inbound call" : "Outbound call"}
+          </p>
+          <p className="mt-1 text-sm text-[var(--text-secondary)]">
+            {leadName} | {call.createdAt}
+          </p>
+        </div>
+        <span className="rounded-full bg-[rgba(124,77,255,0.14)] px-3 py-1 text-xs text-[var(--accent-soft)]">
+          {call.status}
+        </span>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-[var(--text-secondary)]">
+        <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
+          <p className="font-semibold text-white">Call SID</p>
+          <p className="mt-1 break-all">{call.callSid ?? "Not captured"}</p>
+        </div>
+        <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
+          <p className="font-semibold text-white">Next action</p>
+          <p className="mt-1">{call.nextAction ?? "No next action logged yet"}</p>
+        </div>
+      </div>
+      <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+        <p className="text-sm font-semibold text-white">Summary</p>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">{call.summary}</p>
+      </div>
+      <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+        <p className="text-sm font-semibold text-white">Transcript</p>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--text-secondary)]">
+          {call.transcript ??
+            "Transcript is not available for this call yet. Current live phone flow is logging summaries and call history, and we can add full transcript capture next."}
+        </p>
+      </div>
+      {call.recordingUrl && (
+        <a
+          href={call.recordingUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 inline-flex rounded-full border border-[rgba(124,77,255,0.28)] bg-[rgba(124,77,255,0.16)] px-4 py-2 text-sm font-semibold text-white"
+        >
+          Open recording
+        </a>
+      )}
+    </div>
   );
 }
 

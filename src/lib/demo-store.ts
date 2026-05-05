@@ -6,6 +6,7 @@ import {
   type Approval,
   type AuditLog,
   type Automation,
+  type CallLog,
   type Contact,
   type Conversation,
   type CrmTimelineItem,
@@ -319,6 +320,36 @@ function seedCrmTimeline(): CrmTimelineItem[] {
   ];
 }
 
+function seedCallLogs(): CallLog[] {
+  return [
+    {
+      id: "call_1",
+      workspaceId: "ws_forklift",
+      leadId: "lead_1",
+      direction: "inbound",
+      status: "completed",
+      summary: "Caller wants to buy an electric 2-ton forklift for warehouse use.",
+      transcript:
+        "AEGIS: Are you looking to buy or sell a forklift today?\nCaller: Buy.\nAEGIS: Is that electric, diesel or LPG?\nCaller: Electric, around two ton for a warehouse.\nAEGIS: I can help with that and suggest matching stock.",
+      callSid: "CA_DEMO_001",
+      createdAt: "Today, 09:18",
+      createdAtValue: new Date(Date.now() - 75 * 60 * 1000).toISOString(),
+    },
+    {
+      id: "call_2",
+      workspaceId: "ws_forklift",
+      direction: "outbound",
+      status: "completed",
+      summary: "Quote follow-up call completed and callback requested for tomorrow.",
+      transcript:
+        "AEGIS: I'm following up on your forklift quote.\nLead: Thanks, can we speak tomorrow morning?\nAEGIS: Absolutely, I'll note that for the team.",
+      callSid: "CA_DEMO_002",
+      createdAt: "Yesterday, 16:42",
+      createdAtValue: new Date(Date.now() - 19 * 60 * 60 * 1000).toISOString(),
+    },
+  ];
+}
+
 function seedAutomations(): Automation[] {
   return [
     {
@@ -480,6 +511,7 @@ function createSnapshot(): Snapshot {
     tasks: seedTasks(),
     leads: seedLeads(),
     crmTimeline: seedCrmTimeline(),
+    callLogs: seedCallLogs(),
     automations: seedAutomations(),
     conversations: seedConversations(),
     auditLogs: [],
