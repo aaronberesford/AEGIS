@@ -858,11 +858,12 @@ export async function workspaceById(workspaceId: string) {
 export async function findWorkspaceByTwilioNumber(phoneNumber: string) {
   const snapshot = await getSnapshot();
   const normalize = (value: string) => value.replace(/[^\d+]/g, "");
+  const normalizedPhone = normalize(phoneNumber);
   const matchingIntegration = snapshot.integrationSettings.find(
     (setting) =>
       setting.provider === "twilio" &&
       typeof setting.config.phoneNumber === "string" &&
-      normalize(String(setting.config.phoneNumber)) === normalize(phoneNumber),
+      normalize(String(setting.config.phoneNumber)) === normalizedPhone,
   );
 
   if (matchingIntegration) {
@@ -873,10 +874,10 @@ export async function findWorkspaceByTwilioNumber(phoneNumber: string) {
     );
   }
 
-  if (
-    env().twilioPhoneNumber &&
-    normalize(env().twilioPhoneNumber) === normalize(phoneNumber)
-  ) {
+  const envTwilioMatches =
+    env().twilioPhoneNumber && normalize(env().twilioPhoneNumber) === normalizedPhone;
+
+  if (envTwilioMatches) {
     const activeTwilioWorkspace = snapshot.integrationSettings.find(
       (setting) => setting.provider === "twilio" && setting.status === "connected",
     )?.workspaceId;
@@ -886,11 +887,31 @@ export async function findWorkspaceByTwilioNumber(phoneNumber: string) {
         snapshot.workspaces.find((workspace) => workspace.id === activeTwilioWorkspace) ?? null
       );
     }
+
+    const anyTwilioWorkspace = snapshot.integrationSettings.find(
+      (setting) => setting.provider === "twilio",
+    )?.workspaceId;
+
+    if (anyTwilioWorkspace) {
+      return (
+        snapshot.workspaces.find((workspace) => workspace.id === anyTwilioWorkspace) ?? null
+      );
+    }
+
+    if (env().base44WorkspaceId) {
+      const configuredWorkspace = snapshot.workspaces.find(
+        (workspace) => workspace.id === env().base44WorkspaceId,
+      );
+
+      if (configuredWorkspace) {
+        return configuredWorkspace;
+      }
+    }
   }
 
   return (
     snapshot.workspaces.find(
-      (workspace) => normalize(workspace.twilioNumber) === normalize(phoneNumber),
+      (workspace) => normalize(workspace.twilioNumber) === normalizedPhone,
     ) ?? null
   );
 }
