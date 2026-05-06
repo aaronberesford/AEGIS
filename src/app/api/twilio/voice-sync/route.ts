@@ -17,8 +17,13 @@ import {
 import {
   buildBase44ForkliftCustomerSummary,
   buildBase44ForkliftListingLink,
+  createBase44PaymentRecord,
   findBase44ForkliftByReference,
   findBase44CustomerByPhone,
+  markBase44ForkliftSold,
+  reserveBase44ForkliftForBuyer,
+  upsertBase44InvoiceRecord,
+  upsertBase44SaleRecord,
   upsertBase44CustomerFromCall,
 } from "@/lib/services/base44";
 import { extractPhoneCallOutcome } from "@/lib/services/openai";
@@ -247,7 +252,11 @@ export async function POST(request: Request) {
       name: leadName,
       company: leadCompany === "Unassigned" ? "" : leadCompany,
       email: leadEmail,
-      type: outcome.purchaseCompleted ? "Customer" : "Lead",
+      address: outcome.deliveryPostcode?.trim() || "",
+      type:
+        outcome.purchaseCompleted || outcome.purchaseIntent === "ready_now"
+          ? "Customer"
+          : "Lead",
       historyNote: outcome.customerHistoryNote,
     });
 
@@ -312,7 +321,7 @@ export async function POST(request: Request) {
       });
     }
 
-    if (lead && needsPaymentFollowUp) {
+    if (lead && (needsPaymentFollowUp || outcome.purchaseCompleted)) {
       const truckLink = matchedForklift
         ? buildBase44ForkliftListingLink(matchedForklift)
         : null;
@@ -329,6 +338,14 @@ export async function POST(request: Request) {
         matchedForklift?.title || outcome.selectedTruckTitle || "the requested truck";
       const priceLabel = matchedForklift?.priceDisplay || "price to confirm";
       const deliveryPostcode = outcome.deliveryPostcode?.trim() || "not captured";
+      const reservationNote = [
+        `Reserved via AEGIS phone call on ${new Date().toISOString()}.`,
+        `Buyer: ${lead.name}.`,
+        `Company: ${leadCompany}.`,
+        `Email: ${leadEmail || "not captured"}.`,
+        `Delivery postcode: ${deliveryPostcode}.`,
+        `Call summary: ${outcome.summary}`,
+      ].join(" ");
       const purchaseSummaryBody = [
         `Hi ${lead.name},`,
         "",
@@ -362,7 +379,87 @@ export async function POST(request: Request) {
         .filter(Boolean)
         .join(" ");
 
-      if (leadEmail && shouldSendPurchaseSummary) {
+      if (matchedForklift && needsPaymentFollowUp) {
+        await reserveBase44ForkliftForBuyer(workspace, {
+          forkliftId: matchedForklift.id,
+          buyerName: lead.name,
+          buyerCompany: leadCompany === "Unassigned" ? "" : leadCompany,
+          buyerContact: [body.phoneNumber, leadEmail].filter(Boolean).join(" / "),
+          reservationNote,
+        });
+      }
+
+      const invoiceRecord =
+        syncedCustomer && matchedForklift
+          ? await upsertBase44InvoiceRecord(workspace, {
+              customerId: syncedCustomer.id,
+              forkliftId: matchedForklift.id,
+              amount: parsePriceDisplay(matchedForklift.priceDisplay),
+              amountDisplay: matchedForklift.priceDisplay,
+              issueDate: new Date().toISOString(),
+              dueDate: resolveFollowUpDate(outcome.callbackTiming),
+              status: outcome.purchaseCompleted ? "Paid" : "Draft",
+              description: `Purchase request for ${truckName} (${matchedForklift.listingId ?? "truck ref pending"})`,
+              notes: [
+                `Prepared by AEGIS after a live phone call.`,
+                `Buyer type: ${buyerTypeLabel}.`,
+                `Delivery postcode: ${deliveryPostcode}.`,
+                `Truck link: ${linkLabel}`,
+                `Call summary: ${outcome.summary}`,
+              ].join(" "),
+            })
+          : null;
+
+      if (outcome.purchaseCompleted && matchedForklift) {
+        await markBase44ForkliftSold(workspace, {
+          forkliftId: matchedForklift.id,
+          buyerName: lead.name,
+          buyerCompany: leadCompany === "Unassigned" ? "" : leadCompany,
+          buyerContact: [body.phoneNumber, leadEmail].filter(Boolean).join(" / "),
+          soldDate: new Date().toISOString(),
+          soldPrice: parsePriceDisplay(matchedForklift.priceDisplay),
+          soldPriceDisplay: matchedForklift.priceDisplay,
+          salesNote: `Marked sold by AEGIS from phone purchase. ${outcome.summary}`,
+        });
+
+        await upsertBase44SaleRecord(workspace, {
+          forkliftId: matchedForklift.id,
+          customerName: lead.name,
+          customerEmail: leadEmail,
+          customerPhone: body.phoneNumber,
+          customerCompany: leadCompany === "Unassigned" ? "" : leadCompany,
+          saleDate: new Date().toISOString(),
+          salePrice: parsePriceDisplay(matchedForklift.priceDisplay),
+          salePriceDisplay: matchedForklift.priceDisplay,
+          paymentMethod: "Bank Transfer",
+          notes: `Completed by AEGIS from phone purchase. ${outcome.summary}`,
+        });
+
+        if (invoiceRecord) {
+          await upsertBase44InvoiceRecord(workspace, {
+            customerId: syncedCustomer?.id ?? "",
+            forkliftId: matchedForklift.id,
+            amount: parsePriceDisplay(matchedForklift.priceDisplay),
+            amountDisplay: matchedForklift.priceDisplay,
+            issueDate: new Date().toISOString(),
+            dueDate: new Date().toISOString(),
+            status: "Paid",
+            description: `Paid sale for ${truckName}`,
+            notes: `Marked paid automatically from AEGIS purchase completion.`,
+          });
+
+          await createBase44PaymentRecord(workspace, {
+            invoiceId: invoiceRecord.id,
+            amount: parsePriceDisplay(matchedForklift.priceDisplay),
+            paymentDate: new Date().toISOString(),
+            paymentMethod: "Bank Transfer",
+            reference: body.callSid ?? undefined,
+            notes: `Recorded by AEGIS after completed phone purchase.`,
+          });
+        }
+      }
+
+      if (leadEmail && shouldSendPurchaseSummary && needsPaymentFollowUp) {
         await previewAgentAction({
           message: "",
           actionCards: [],
@@ -381,13 +478,14 @@ export async function POST(request: Request) {
                 matchedForklift?.listingId ?? outcome.selectedListingId ?? "",
               truckTitle: truckName,
               truckLink: truckLink ?? matchedForklift?.urlPath ?? "",
+              invoiceId: invoiceRecord?.id ?? "",
               category: "purchase_summary",
             },
           ),
         });
       }
 
-      if (leadEmail && shouldSendInvoiceLink) {
+      if (leadEmail && shouldSendInvoiceLink && needsPaymentFollowUp) {
         await previewAgentAction({
           message: "",
           actionCards: [],
@@ -406,13 +504,14 @@ export async function POST(request: Request) {
                 matchedForklift?.listingId ?? outcome.selectedListingId ?? "",
               truckTitle: truckName,
               truckLink: truckLink ?? matchedForklift?.urlPath ?? "",
+              invoiceId: invoiceRecord?.id ?? "",
               category: "invoice_payment",
             },
           ),
         });
       }
 
-      if (shouldSendPurchaseSummary) {
+      if (shouldSendPurchaseSummary && needsPaymentFollowUp) {
         await previewAgentAction({
           message: "",
           actionCards: [],
@@ -431,21 +530,24 @@ export async function POST(request: Request) {
                 matchedForklift?.listingId ?? outcome.selectedListingId ?? "",
               truckTitle: truckName,
               truckLink: truckLink ?? matchedForklift?.urlPath ?? "",
+              invoiceId: invoiceRecord?.id ?? "",
               category: "purchase_summary_sms",
             },
           ),
         });
       }
 
-      await scheduleLeadFollowUp({
-        workspaceId: body.workspaceId,
-        leadId: lead.id,
-        title: `Check payment status for ${lead.name}`,
-        description:
-          outcome.nextAction ||
-          `Follow up ${lead.name} if payment has not been received for ${truckName}.`,
-        dueAt: resolveFollowUpDate(outcome.callbackTiming),
-      });
+      if (needsPaymentFollowUp) {
+        await scheduleLeadFollowUp({
+          workspaceId: body.workspaceId,
+          leadId: lead.id,
+          title: `Check payment status for ${lead.name}`,
+          description:
+            outcome.nextAction ||
+            `Follow up ${lead.name} if payment has not been received for ${truckName}.`,
+          dueAt: resolveFollowUpDate(outcome.callbackTiming),
+        });
+      }
     }
 
     await logCallActivity({
@@ -471,6 +573,8 @@ export async function POST(request: Request) {
         selectedListingId: matchedForklift?.listingId ?? outcome.selectedListingId ?? null,
         customerId: syncedCustomer?.id ?? null,
         leadId: lead?.id ?? null,
+        reservedForkliftId:
+          needsPaymentFollowUp && matchedForklift ? matchedForklift.id : null,
       }),
       approvalStatus: "not_required",
     });

@@ -38,6 +38,11 @@ type Base44Forklift = {
   card_spec_line?: string | null;
   card_headline?: string | null;
   ebay_listing_status?: string | null;
+  buyer_name?: string | null;
+  buyer_company?: string | null;
+  buyer_contact?: string | null;
+  sales_notes?: string | null;
+  internal_notes?: string | null;
   updated_date?: string;
 };
 
@@ -59,6 +64,7 @@ type Base44Customer = {
   company?: string | null;
   email?: string | null;
   phone?: string | null;
+  address?: string | null;
   type?: string | null;
   notes?: string | null;
   updated_date?: string;
@@ -70,6 +76,7 @@ export type Base44CustomerRecord = {
   company: string | null;
   email: string | null;
   phone: string | null;
+  address: string | null;
   type: string | null;
   notes: string | null;
 };
@@ -104,11 +111,44 @@ export type Base44ForkliftRecord = {
 
 type Base44Sale = {
   id: string;
+  forklift_id?: string | null;
   customer_name?: string | null;
+  customer_email?: string | null;
+  customer_phone?: string | null;
   customer_company?: string | null;
   sale_date?: string | null;
   sale_price?: number | null;
+  cost_price?: number | null;
+  profit?: number | null;
   payment_method?: string | null;
+  notes?: string | null;
+  documents?: Array<{ name?: string; url?: string }> | null;
+  updated_date?: string;
+};
+
+type Base44Invoice = {
+  id: string;
+  invoice_number?: string | null;
+  type?: string | null;
+  forklift_id?: string | null;
+  customer_id?: string | null;
+  issue_date?: string | null;
+  due_date?: string | null;
+  amount?: number | null;
+  status?: string | null;
+  description?: string | null;
+  notes?: string | null;
+  updated_date?: string;
+};
+
+type Base44Payment = {
+  id: string;
+  invoice_id?: string | null;
+  payment_date?: string | null;
+  amount?: number | null;
+  payment_method?: string | null;
+  reference?: string | null;
+  notes?: string | null;
   updated_date?: string;
 };
 
@@ -148,6 +188,8 @@ type Base44WorkspaceData = {
   palletTrucks: Base44PalletTruck[];
   customers: Base44Customer[];
   sales: Base44Sale[];
+  invoices: Base44Invoice[];
+  payments: Base44Payment[];
   maintenance: Base44MaintenanceRecord[];
   parts: Base44Part[];
   fetchedAt: string;
@@ -377,6 +419,7 @@ function mapCustomerRecord(customer: Base44Customer): Base44CustomerRecord {
     company: customer.company?.trim() || null,
     email: customer.email?.trim() || null,
     phone: customer.phone?.trim() || null,
+    address: customer.address?.trim() || null,
     type: customer.type?.trim() || null,
     notes: customer.notes?.trim() || null,
   };
@@ -552,7 +595,7 @@ function buildWorkspaceSummary(data: Base44WorkspaceData) {
 
   return [
     data.app.user_description ?? `${data.app.name ?? "ForkliftPro"} data is connected.`,
-    `${forklifts.length} live forklifts in stock, ${pallets.length} pallet trucks, ${data.customers.length} customers, ${data.sales.length} recorded sales, ${lowStock.length} low-stock parts alerts.`,
+    `${forklifts.length} live forklifts in stock, ${pallets.length} pallet trucks, ${data.customers.length} customers, ${data.sales.length} recorded sales, ${data.invoices.length} invoices, ${data.payments.length} payments, ${lowStock.length} low-stock parts alerts.`,
   ].join(" ");
 }
 
@@ -565,7 +608,17 @@ async function fetchBase44WorkspaceData(): Promise<Base44WorkspaceData> {
 
   const client = getBase44Client();
   try {
-    const [app, forklifts, palletTrucks, customers, sales, maintenance, parts] =
+    const [
+      app,
+      forklifts,
+      palletTrucks,
+      customers,
+      sales,
+      invoices,
+      payments,
+      maintenance,
+      parts,
+    ] =
       await Promise.all([
         fetchBase44Metadata(),
         client.entities.Forklift.list("-updated_date", 120) as Promise<Base44Forklift[]>,
@@ -575,6 +628,8 @@ async function fetchBase44WorkspaceData(): Promise<Base44WorkspaceData> {
         ) as Promise<Base44PalletTruck[]>,
         client.entities.Customer.list("-updated_date", 120) as Promise<Base44Customer[]>,
         client.entities.Sale.list("-updated_date", 60) as Promise<Base44Sale[]>,
+        client.entities.Invoice.list("-updated_date", 120) as Promise<Base44Invoice[]>,
+        client.entities.Payment.list("-updated_date", 120) as Promise<Base44Payment[]>,
         client.entities.MaintenanceRecord.list(
           "-updated_date",
           80,
@@ -588,6 +643,8 @@ async function fetchBase44WorkspaceData(): Promise<Base44WorkspaceData> {
       palletTrucks,
       customers,
       sales,
+      invoices,
+      payments,
       maintenance,
       parts,
       fetchedAt: new Date().toISOString(),
@@ -807,6 +864,7 @@ export async function upsertBase44CustomerFromCall(
     name?: string | null;
     company?: string | null;
     email?: string | null;
+    address?: string | null;
     existingCustomerId?: string | null;
     type?: string | null;
     historyNote: string;
@@ -831,6 +889,7 @@ export async function upsertBase44CustomerFromCall(
         company: input.company?.trim() || existing.company,
         email: input.email?.trim() || existing.email,
         phone: input.phoneNumber.trim() || existing.phone,
+        address: input.address?.trim() || existing.address || "",
         type: input.type?.trim() || existing.type || "Customer",
         notes: nextNotes,
       })) as Base44Customer;
@@ -844,6 +903,7 @@ export async function upsertBase44CustomerFromCall(
       company: input.company?.trim() || "",
       email: input.email?.trim() || "",
       phone: input.phoneNumber.trim(),
+      address: input.address?.trim() || "",
       type: input.type?.trim() || "Lead",
       notes: input.historyNote,
     })) as Base44Customer;
@@ -855,6 +915,307 @@ export async function upsertBase44CustomerFromCall(
       error instanceof Error ? error.message : "Unable to update Base44 customer.",
       {
         code: "BASE44_CUSTOMER_UPSERT_FAILED",
+        status: 502,
+      },
+    );
+  } finally {
+    client.cleanup();
+  }
+}
+
+function isoDate(value?: string | null) {
+  if (!value?.trim()) {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  return parsed.toISOString().slice(0, 10);
+}
+
+function appendNote(existing: string | null | undefined, addition: string) {
+  return [existing?.trim(), addition.trim()].filter(Boolean).join("\n\n");
+}
+
+function parseCurrencyNumber(
+  amount: number | null | undefined,
+  display?: string | null,
+) {
+  if (typeof amount === "number" && Number.isFinite(amount)) {
+    return amount;
+  }
+
+  if (!display) {
+    return 0;
+  }
+
+  const parsed = Number(display.replace(/[^\d.]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function makeInvoiceNumber() {
+  const now = new Date();
+  const datePart = [
+    now.getUTCFullYear(),
+    String(now.getUTCMonth() + 1).padStart(2, "0"),
+    String(now.getUTCDate()).padStart(2, "0"),
+  ].join("");
+  const timePart = [
+    String(now.getUTCHours()).padStart(2, "0"),
+    String(now.getUTCMinutes()).padStart(2, "0"),
+    String(now.getUTCSeconds()).padStart(2, "0"),
+  ].join("");
+  return `AEGIS-${datePart}-${timePart}`;
+}
+
+export async function reserveBase44ForkliftForBuyer(
+  workspace: Workspace,
+  input: {
+    forkliftId: string;
+    buyerName: string;
+    buyerCompany?: string | null;
+    buyerContact?: string | null;
+    reservationNote: string;
+  },
+) {
+  if (!isBase44EnabledForWorkspace(workspace)) {
+    return null;
+  }
+
+  const client = getBase44Client();
+  try {
+    const existing = (await client.entities.Forklift.get(input.forkliftId)) as Base44Forklift;
+    const updated = (await client.entities.Forklift.update(input.forkliftId, {
+      stock_status: "Reserved",
+      buyer_name: input.buyerName,
+      buyer_company: input.buyerCompany?.trim() || "",
+      buyer_contact: input.buyerContact?.trim() || "",
+      sales_notes: appendNote(existing.sales_notes, input.reservationNote),
+      internal_notes: appendNote(
+        existing.internal_notes,
+        `Reserved by AEGIS on ${new Date().toISOString()}.`,
+      ),
+    })) as Base44Forklift;
+    cache.clear();
+    return mapForkliftRecord(updated);
+  } catch (error) {
+    throw new AppError(
+      error instanceof Error ? error.message : "Unable to reserve Base44 forklift.",
+      {
+        code: "BASE44_FORKLIFT_RESERVE_FAILED",
+        status: 502,
+      },
+    );
+  } finally {
+    client.cleanup();
+  }
+}
+
+export async function markBase44ForkliftSold(
+  workspace: Workspace,
+  input: {
+    forkliftId: string;
+    buyerName: string;
+    buyerCompany?: string | null;
+    buyerContact?: string | null;
+    soldDate?: string | null;
+    soldPrice?: number | null;
+    soldPriceDisplay?: string | null;
+    salesNote: string;
+  },
+) {
+  if (!isBase44EnabledForWorkspace(workspace)) {
+    return null;
+  }
+
+  const client = getBase44Client();
+  try {
+    const existing = (await client.entities.Forklift.get(input.forkliftId)) as Base44Forklift;
+    const updated = (await client.entities.Forklift.update(input.forkliftId, {
+      stock_status: "Sold",
+      buyer_name: input.buyerName,
+      buyer_company: input.buyerCompany?.trim() || "",
+      buyer_contact: input.buyerContact?.trim() || "",
+      date_sold: isoDate(input.soldDate),
+      sold_price: input.soldPrice ?? parseCurrencyNumber(null, input.soldPriceDisplay),
+      sold_price_display: input.soldPriceDisplay?.trim() || existing.price_display || "",
+      sales_notes: appendNote(existing.sales_notes, input.salesNote),
+      internal_notes: appendNote(
+        existing.internal_notes,
+        `Marked sold by AEGIS on ${new Date().toISOString()}.`,
+      ),
+    })) as Base44Forklift;
+    cache.clear();
+    return mapForkliftRecord(updated);
+  } catch (error) {
+    throw new AppError(
+      error instanceof Error ? error.message : "Unable to mark Base44 forklift sold.",
+      {
+        code: "BASE44_FORKLIFT_SOLD_FAILED",
+        status: 502,
+      },
+    );
+  } finally {
+    client.cleanup();
+  }
+}
+
+export async function upsertBase44InvoiceRecord(
+  workspace: Workspace,
+  input: {
+    customerId: string;
+    forkliftId?: string | null;
+    amount?: number | null;
+    amountDisplay?: string | null;
+    issueDate?: string | null;
+    dueDate?: string | null;
+    status: "Draft" | "Sent" | "Partial" | "Paid" | "Overdue" | "Cancelled";
+    description: string;
+    notes?: string | null;
+  },
+) {
+  if (!isBase44EnabledForWorkspace(workspace)) {
+    return null;
+  }
+
+  const client = getBase44Client();
+  try {
+    const data = await fetchBase44WorkspaceData();
+    const existing = data.invoices.find(
+      (invoice) =>
+        invoice.customer_id === input.customerId &&
+        invoice.forklift_id === (input.forkliftId ?? null) &&
+        ["Draft", "Sent", "Partial", "Overdue"].includes(invoice.status ?? ""),
+    );
+
+    const payload = {
+      invoice_number: existing?.invoice_number || makeInvoiceNumber(),
+      type: "Receivable",
+      forklift_id: input.forkliftId ?? "",
+      customer_id: input.customerId,
+      issue_date: isoDate(input.issueDate),
+      due_date: isoDate(input.dueDate),
+      amount: parseCurrencyNumber(input.amount, input.amountDisplay),
+      status: input.status,
+      description: input.description,
+      notes: appendNote(existing?.notes, input.notes?.trim() || input.description),
+    };
+
+    const invoice = existing
+      ? ((await client.entities.Invoice.update(existing.id, payload)) as Base44Invoice)
+      : ((await client.entities.Invoice.create(payload)) as Base44Invoice);
+
+    cache.clear();
+    return invoice;
+  } catch (error) {
+    throw new AppError(
+      error instanceof Error ? error.message : "Unable to upsert Base44 invoice.",
+      {
+        code: "BASE44_INVOICE_UPSERT_FAILED",
+        status: 502,
+      },
+    );
+  } finally {
+    client.cleanup();
+  }
+}
+
+export async function createBase44PaymentRecord(
+  workspace: Workspace,
+  input: {
+    invoiceId: string;
+    amount: number;
+    paymentDate?: string | null;
+    paymentMethod: "Cash" | "Bank Transfer" | "Check" | "Card" | "Other";
+    reference?: string | null;
+    notes?: string | null;
+  },
+) {
+  if (!isBase44EnabledForWorkspace(workspace)) {
+    return null;
+  }
+
+  const client = getBase44Client();
+  try {
+    const payment = (await client.entities.Payment.create({
+      invoice_id: input.invoiceId,
+      payment_date: isoDate(input.paymentDate),
+      amount: input.amount,
+      payment_method: input.paymentMethod,
+      reference: input.reference?.trim() || "",
+      notes: input.notes?.trim() || "",
+    })) as Base44Payment;
+
+    cache.clear();
+    return payment;
+  } catch (error) {
+    throw new AppError(
+      error instanceof Error ? error.message : "Unable to create Base44 payment.",
+      {
+        code: "BASE44_PAYMENT_CREATE_FAILED",
+        status: 502,
+      },
+    );
+  } finally {
+    client.cleanup();
+  }
+}
+
+export async function upsertBase44SaleRecord(
+  workspace: Workspace,
+  input: {
+    forkliftId: string;
+    customerName: string;
+    customerEmail?: string | null;
+    customerPhone?: string | null;
+    customerCompany?: string | null;
+    saleDate?: string | null;
+    salePrice?: number | null;
+    salePriceDisplay?: string | null;
+    paymentMethod?: "Cash" | "Bank Transfer" | "Check" | "Financing" | null;
+    notes: string;
+  },
+) {
+  if (!isBase44EnabledForWorkspace(workspace)) {
+    return null;
+  }
+
+  const client = getBase44Client();
+  try {
+    const data = await fetchBase44WorkspaceData();
+    const existing = data.sales.find(
+      (sale) =>
+        sale.forklift_id === input.forkliftId &&
+        sale.customer_name?.trim() === input.customerName.trim(),
+    );
+    const salePrice = parseCurrencyNumber(input.salePrice, input.salePriceDisplay);
+
+    const payload = {
+      forklift_id: input.forkliftId,
+      customer_name: input.customerName,
+      customer_email: input.customerEmail?.trim() || "",
+      customer_phone: input.customerPhone?.trim() || "",
+      customer_company: input.customerCompany?.trim() || "",
+      sale_date: isoDate(input.saleDate),
+      sale_price: salePrice,
+      payment_method: input.paymentMethod ?? "Bank Transfer",
+      notes: appendNote(existing?.notes, input.notes),
+    };
+
+    const sale = existing
+      ? ((await client.entities.Sale.update(existing.id, payload)) as Base44Sale)
+      : ((await client.entities.Sale.create(payload)) as Base44Sale);
+
+    cache.clear();
+    return sale;
+  } catch (error) {
+    throw new AppError(
+      error instanceof Error ? error.message : "Unable to upsert Base44 sale.",
+      {
+        code: "BASE44_SALE_UPSERT_FAILED",
         status: 502,
       },
     );

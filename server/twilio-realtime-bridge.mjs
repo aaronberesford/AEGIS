@@ -198,6 +198,7 @@ function buildInstructions(
     "If buying, ask for power type, lift capacity, lift height, budget, timing and location, then recommend matching stock only from this inventory.",
     "If the caller wants to buy a truck now, confirm the exact truck or listing ID, the quoted price, whether it is a business or personal purchase, their full name, company, phone, email and delivery postcode.",
     "For a buy-now caller, tell them you will send the listing link and purchase summary, and that the team can send the invoice or payment link next.",
+    "Do not collect card or bank payment details over the phone.",
     "If selling, ask for make, model, year, fuel, lift capacity, mast height, hours, condition, asking price and location.",
     "Always work out whether the caller is already known or a new contact.",
     "For new callers, collect full name, company and email before ending the call.",
