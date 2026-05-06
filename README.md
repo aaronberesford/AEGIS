@@ -87,6 +87,7 @@ Set these environment variables in Vercel:
 - `BASE44_APP_ID=...`
 - `BASE44_API_KEY=...`
 - `BASE44_WORKSPACE_ID=22222222-2222-2222-2222-222222222221`
+- `FORKLIFT_WEBSITE_BASE_URL=https://your-forklift-site.example`
 - `TWILIO_ACCOUNT_SID=...`
 - `TWILIO_AUTH_TOKEN=...`
 - `TWILIO_PHONE_NUMBER=+447367172076`
@@ -175,8 +176,9 @@ After Supabase is configured, connect the live services:
 1. Add `OPENAI_API_KEY`
 2. Add `BASE44_APP_ID` and `BASE44_API_KEY` if you want Forklift Pro Solutions to use live ForkliftPro stock, customer, sales, maintenance, and parts data
 3. Optionally set `BASE44_WORKSPACE_ID` to the Forklift Pro Solutions workspace ID if you only want Base44 data attached to that workspace
-4. Add `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER`
-5. Point `NEXT_PUBLIC_APP_URL` to the public app URL for Twilio callbacks
+4. Optionally set `FORKLIFT_WEBSITE_BASE_URL` so AEGIS can include full clickable truck links in phone-generated purchase summary drafts
+5. Add `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER`
+6. Point `NEXT_PUBLIC_APP_URL` to the public app URL for Twilio callbacks
 
 ## Important implementation notes
 

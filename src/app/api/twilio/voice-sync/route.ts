@@ -5,14 +5,19 @@ import { AppError, toErrorResponse } from "@/lib/errors";
 import {
   addAuditLog,
   addCrmNote,
-  createFollowUpTask,
+  createGeneratedApproval,
   createLeadRecord,
   findLeadByPhone,
   logCallActivity,
+  previewAgentAction,
+  scheduleLeadFollowUp,
   updateLeadStatus,
   workspaceById,
 } from "@/lib/repository";
 import {
+  buildBase44ForkliftCustomerSummary,
+  buildBase44ForkliftListingLink,
+  findBase44ForkliftByReference,
   findBase44CustomerByPhone,
   upsertBase44CustomerFromCall,
 } from "@/lib/services/base44";
@@ -128,6 +133,44 @@ function resolveFollowUpDate(callbackTiming?: string | null) {
   return now.toISOString();
 }
 
+function parsePriceDisplay(value?: string | null) {
+  if (!value) {
+    return 0;
+  }
+
+  const normalized = value.replace(/[^\d.]/g, "");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function purchaseDecisionStatus(input: {
+  leadStatus: string;
+  purchaseIntent: "ready_now" | "considering" | "not_buying" | "unknown";
+  purchaseCompleted: boolean;
+}) {
+  if (input.purchaseCompleted) {
+    return "Won";
+  }
+
+  if (input.purchaseIntent === "ready_now") {
+    return "Purchase ready";
+  }
+
+  return input.leadStatus;
+}
+
+function buildTruckLinkLabel(link: string | null, listingId: string | null) {
+  if (link) {
+    return link;
+  }
+
+  if (listingId) {
+    return `Truck reference: ${listingId}`;
+  }
+
+  return "Truck link to be confirmed by the sales team.";
+}
+
 export async function POST(request: Request) {
   try {
     requireVoiceSyncAuth(request);
@@ -168,6 +211,14 @@ export async function POST(request: Request) {
       existingCustomerContext: customerContext,
     });
 
+    const matchedForklift =
+      outcome.intent === "buy"
+        ? await findBase44ForkliftByReference(workspace, {
+            listingId: outcome.selectedListingId,
+            title: outcome.selectedTruckTitle,
+            query: `${outcome.selectedListingId ?? ""} ${outcome.selectedTruckTitle ?? ""}`.trim(),
+          })
+        : null;
     const leadName =
       outcome.callerName?.trim() ||
       base44Customer?.name ||
@@ -177,8 +228,18 @@ export async function POST(request: Request) {
       outcome.company?.trim() || base44Customer?.company || existingLead?.company || "Unassigned";
     const leadEmail =
       outcome.email?.trim() || base44Customer?.email || existingLead?.email || "";
-    const needsFollowUp =
-      outcome.requestedCallback || (!outcome.purchaseCompleted && outcome.intent !== "unknown");
+    const resolvedLeadStatus = purchaseDecisionStatus({
+      leadStatus: outcome.leadStatus,
+      purchaseIntent: outcome.purchaseIntent,
+      purchaseCompleted: outcome.purchaseCompleted,
+    });
+    const needsPaymentFollowUp =
+      outcome.purchaseIntent === "ready_now" && !outcome.purchaseCompleted;
+    const needsGeneralFollowUp =
+      outcome.requestedCallback ||
+      (!needsPaymentFollowUp &&
+        !outcome.purchaseCompleted &&
+        outcome.intent !== "unknown");
 
     const syncedCustomer = await upsertBase44CustomerFromCall(workspace, {
       existingCustomerId: body.knownCustomerId ?? base44Customer?.id ?? null,
@@ -191,41 +252,198 @@ export async function POST(request: Request) {
     });
 
     let lead = existingLead;
-    if (!lead && (outcome.shouldCreateLead || needsFollowUp)) {
+    if (!lead && (outcome.shouldCreateLead || needsGeneralFollowUp || needsPaymentFollowUp)) {
       lead = await createLeadRecord({
         workspaceId: body.workspaceId,
         name: leadName,
         phone: body.phoneNumber,
         email: leadEmail,
         source: `Phone ${body.direction ?? "inbound"}`,
-        status: outcome.leadStatus,
+        status: resolvedLeadStatus,
         company: leadCompany === "Unassigned" ? undefined : leadCompany,
+        estimatedValue: matchedForklift
+          ? parsePriceDisplay(matchedForklift.priceDisplay)
+          : undefined,
         nextFollowUpAt:
-          needsFollowUp ? resolveFollowUpDate(outcome.callbackTiming) : undefined,
+          needsGeneralFollowUp || needsPaymentFollowUp
+            ? resolveFollowUpDate(outcome.callbackTiming)
+            : undefined,
       });
     } else if (lead) {
       await updateLeadStatus({
         workspaceId: body.workspaceId,
         leadId: lead.id,
-        status: outcome.leadStatus,
-        nextFollowUpAt: needsFollowUp ? resolveFollowUpDate(outcome.callbackTiming) : undefined,
+        status: resolvedLeadStatus,
+        nextFollowUpAt:
+          needsGeneralFollowUp || needsPaymentFollowUp
+            ? resolveFollowUpDate(outcome.callbackTiming)
+            : undefined,
       });
     }
 
     if (lead) {
+      const truckSummary = matchedForklift
+        ? `Truck: ${buildBase44ForkliftCustomerSummary(matchedForklift)}`
+        : null;
       await addCrmNote({
         workspaceId: body.workspaceId,
         leadId: lead.id,
-        content: `${outcome.summary}\n\nRequirements: ${outcome.requirementsSummary}\n\nTranscript:\n${body.transcript}`,
+        content: [
+          outcome.summary,
+          `Requirements: ${outcome.requirementsSummary}`,
+          truckSummary,
+          outcome.purchaseIntent === "ready_now"
+            ? `Purchase details: ${outcome.buyerType ?? "unknown"} purchase, delivery postcode ${outcome.deliveryPostcode ?? "not captured"}.`
+            : null,
+          `Transcript:\n${body.transcript}`,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
       });
     }
 
-    if (lead && needsFollowUp) {
-      await createFollowUpTask({
+    if (lead && needsGeneralFollowUp) {
+      await scheduleLeadFollowUp({
         workspaceId: body.workspaceId,
         leadId: lead.id,
         title: `Call back ${lead.name}`,
         description: outcome.nextAction,
+        dueAt: resolveFollowUpDate(outcome.callbackTiming),
+      });
+    }
+
+    if (lead && needsPaymentFollowUp) {
+      const truckLink = matchedForklift
+        ? buildBase44ForkliftListingLink(matchedForklift)
+        : null;
+      const linkLabel = buildTruckLinkLabel(truckLink, matchedForklift?.listingId ?? null);
+      const shouldSendPurchaseSummary =
+        outcome.wantsPurchaseSummary || outcome.purchaseIntent === "ready_now";
+      const shouldSendInvoiceLink =
+        outcome.wantsInvoiceLink || outcome.purchaseIntent === "ready_now";
+      const buyerTypeLabel =
+        outcome.buyerType && outcome.buyerType !== "unknown"
+          ? outcome.buyerType
+          : "business";
+      const truckName =
+        matchedForklift?.title || outcome.selectedTruckTitle || "the requested truck";
+      const priceLabel = matchedForklift?.priceDisplay || "price to confirm";
+      const deliveryPostcode = outcome.deliveryPostcode?.trim() || "not captured";
+      const purchaseSummaryBody = [
+        `Hi ${lead.name},`,
+        "",
+        `Thanks for speaking with AEGIS about ${truckName}.`,
+        `Truck reference: ${matchedForklift?.listingId ?? outcome.selectedListingId ?? "to confirm"}.`,
+        `Quoted price: ${priceLabel}.`,
+        `Purchase type: ${buyerTypeLabel}.`,
+        `Delivery postcode: ${deliveryPostcode}.`,
+        `Truck link: ${linkLabel}`,
+        "",
+        "We have logged your order interest and can now send the invoice or payment link once approved.",
+        "",
+        `Call summary: ${outcome.summary}`,
+      ].join("\n");
+      const invoiceFollowUpBody = [
+        `Hi ${lead.name},`,
+        "",
+        `We are preparing the invoice and payment link for ${truckName}.`,
+        `Truck reference: ${matchedForklift?.listingId ?? outcome.selectedListingId ?? "to confirm"}.`,
+        `Quoted price: ${priceLabel}.`,
+        "",
+        "Once payment is approved, our team will confirm the order and next delivery steps.",
+      ].join("\n");
+      const smsBody = [
+        `AEGIS: thanks for your interest in ${truckName}.`,
+        matchedForklift?.listingId ? `Ref ${matchedForklift.listingId}.` : null,
+        truckLink ? `Link: ${truckLink}` : null,
+        `Quoted ${priceLabel}.`,
+        "We'll send the purchase summary and payment steps shortly.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      if (leadEmail && shouldSendPurchaseSummary) {
+        await previewAgentAction({
+          message: "",
+          actionCards: [],
+          pendingApproval: createGeneratedApproval(
+            body.workspaceId,
+            `Send purchase summary to ${lead.name}`,
+            leadEmail,
+            purchaseSummaryBody,
+            `Phone buyer is ready to move forward with ${truckName}.`,
+            "high",
+            "send_email",
+            {
+              leadId: lead.id,
+              email: leadEmail,
+              listingId:
+                matchedForklift?.listingId ?? outcome.selectedListingId ?? "",
+              truckTitle: truckName,
+              truckLink: truckLink ?? matchedForklift?.urlPath ?? "",
+              category: "purchase_summary",
+            },
+          ),
+        });
+      }
+
+      if (leadEmail && shouldSendInvoiceLink) {
+        await previewAgentAction({
+          message: "",
+          actionCards: [],
+          pendingApproval: createGeneratedApproval(
+            body.workspaceId,
+            `Send invoice and payment link to ${lead.name}`,
+            leadEmail,
+            invoiceFollowUpBody,
+            `Buyer asked to proceed with ${truckName}; invoice or payment link should be sent after approval.`,
+            "high",
+            "send_email",
+            {
+              leadId: lead.id,
+              email: leadEmail,
+              listingId:
+                matchedForklift?.listingId ?? outcome.selectedListingId ?? "",
+              truckTitle: truckName,
+              truckLink: truckLink ?? matchedForklift?.urlPath ?? "",
+              category: "invoice_payment",
+            },
+          ),
+        });
+      }
+
+      if (shouldSendPurchaseSummary) {
+        await previewAgentAction({
+          message: "",
+          actionCards: [],
+          pendingApproval: createGeneratedApproval(
+            body.workspaceId,
+            `Text truck details to ${lead.name}`,
+            lead.name,
+            smsBody,
+            `Phone buyer is ready to move forward with ${truckName}.`,
+            "medium",
+            "send_sms",
+            {
+              leadId: lead.id,
+              phone: body.phoneNumber,
+              listingId:
+                matchedForklift?.listingId ?? outcome.selectedListingId ?? "",
+              truckTitle: truckName,
+              truckLink: truckLink ?? matchedForklift?.urlPath ?? "",
+              category: "purchase_summary_sms",
+            },
+          ),
+        });
+      }
+
+      await scheduleLeadFollowUp({
+        workspaceId: body.workspaceId,
+        leadId: lead.id,
+        title: `Check payment status for ${lead.name}`,
+        description:
+          outcome.nextAction ||
+          `Follow up ${lead.name} if payment has not been received for ${truckName}.`,
         dueAt: resolveFollowUpDate(outcome.callbackTiming),
       });
     }
@@ -249,6 +467,8 @@ export async function POST(request: Request) {
       output: JSON.stringify({
         summary: outcome.summary,
         intent: outcome.intent,
+        purchaseIntent: outcome.purchaseIntent,
+        selectedListingId: matchedForklift?.listingId ?? outcome.selectedListingId ?? null,
         customerId: syncedCustomer?.id ?? null,
         leadId: lead?.id ?? null,
       }),

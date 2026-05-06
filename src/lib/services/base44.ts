@@ -74,6 +74,34 @@ export type Base44CustomerRecord = {
   notes: string | null;
 };
 
+export type Base44ForkliftRecord = {
+  id: string;
+  listingId: string | null;
+  urlPath: string | null;
+  slug: string | null;
+  title: string;
+  brand: string | null;
+  model: string | null;
+  year: number | null;
+  fuelType: string | null;
+  capacityTonnes: number | null;
+  priceDisplay: string | null;
+  stockStatus: string | null;
+  mastHeightMetres: number | null;
+  mastHeightLabel: string | null;
+  mastType: string | null;
+  location: string | null;
+  deliveryInfo: string | null;
+  sideshift: boolean;
+  freeLift: boolean;
+  attachments: string[];
+  lolerStatus: string | null;
+  conditionNotes: string | null;
+  shortHighlights: string | null;
+  batteryCondition: string | null;
+  conditionGrade: string | null;
+};
+
 type Base44Sale = {
   id: string;
   customer_name?: string | null;
@@ -218,13 +246,25 @@ function forkliftTitle(item: Base44Forklift) {
   );
 }
 
+function normalizeMastHeightLabel(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return null;
+  }
+
+  if (value > 100) {
+    return `${(value / 1000).toFixed(1)}m mast`;
+  }
+
+  return `${value}m mast`;
+}
+
 function forkliftLine(item: Base44Forklift) {
   const details = [
     item.listing_id,
     item.year ? String(item.year) : null,
     item.fuel_type ?? null,
     typeof item.capacity_tonnes === "number" ? `${item.capacity_tonnes}t` : null,
-    typeof item.mast_height_m === "number" ? `${item.mast_height_m}m mast` : null,
+    normalizeMastHeightLabel(item.mast_height_m),
     item.mast_type ?? null,
     item.price_display ?? null,
     item.stock_status ?? null,
@@ -340,6 +380,110 @@ function mapCustomerRecord(customer: Base44Customer): Base44CustomerRecord {
     type: customer.type?.trim() || null,
     notes: customer.notes?.trim() || null,
   };
+}
+
+function mapForkliftRecord(item: Base44Forklift): Base44ForkliftRecord {
+  return {
+    id: item.id,
+    listingId: item.listing_id?.trim() || null,
+    urlPath: item.url_path?.trim() || null,
+    slug: item.slug?.trim() || null,
+    title: forkliftTitle(item),
+    brand: item.brand?.trim() || null,
+    model: item.model?.trim() || null,
+    year: typeof item.year === "number" ? item.year : null,
+    fuelType: item.fuel_type?.trim() || null,
+    capacityTonnes:
+      typeof item.capacity_tonnes === "number" ? item.capacity_tonnes : null,
+    priceDisplay: item.price_display?.trim() || null,
+    stockStatus: item.stock_status?.trim() || null,
+    mastHeightMetres:
+      typeof item.mast_height_m === "number"
+        ? item.mast_height_m > 100
+          ? Number((item.mast_height_m / 1000).toFixed(1))
+          : item.mast_height_m
+        : null,
+    mastHeightLabel: normalizeMastHeightLabel(item.mast_height_m),
+    mastType: item.mast_type?.trim() || null,
+    location: item.location?.trim() || null,
+    deliveryInfo: item.delivery_info?.trim() || null,
+    sideshift: Boolean(item.sideshift),
+    freeLift: Boolean(item.free_lift),
+    attachments: Array.isArray(item.attachments) ? item.attachments.map(String) : [],
+    lolerStatus: item.loler_status?.trim() || null,
+    conditionNotes: item.condition_notes?.trim() || null,
+    shortHighlights: item.short_highlights?.trim() || null,
+    batteryCondition: item.battery_condition?.trim() || null,
+    conditionGrade: item.condition_grade?.trim() || null,
+  };
+}
+
+function normalizeReference(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function forkliftReferenceFields(item: Base44Forklift) {
+  return [
+    item.listing_id,
+    item.url_path,
+    item.slug,
+    item.title,
+    item.brand,
+    item.model,
+    [item.brand, item.model].filter(Boolean).join(" "),
+  ]
+    .filter(Boolean)
+    .map((value) => String(value));
+}
+
+export function buildBase44ForkliftListingLink(record: Base44ForkliftRecord) {
+  if (!record.urlPath) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(record.urlPath)) {
+    return record.urlPath;
+  }
+
+  const base = env().forkliftWebsiteBaseUrl.trim();
+  if (!base) {
+    return record.urlPath;
+  }
+
+  return `${base.replace(/\/$/, "")}/${record.urlPath.replace(/^\//, "")}`;
+}
+
+export function buildBase44ForkliftCustomerSummary(record: Base44ForkliftRecord) {
+  const details = [
+    record.listingId,
+    record.year ? String(record.year) : null,
+    record.fuelType,
+    typeof record.capacityTonnes === "number" ? `${record.capacityTonnes}t` : null,
+    record.mastHeightLabel,
+    record.mastType,
+    record.priceDisplay,
+    record.stockStatus,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  const extras = [
+    record.conditionGrade ? `Condition: ${record.conditionGrade}` : null,
+    record.batteryCondition ? `Battery: ${record.batteryCondition}` : null,
+    record.lolerStatus ? `LOLER: ${record.lolerStatus}` : null,
+    record.location ? `Location: ${record.location}` : null,
+    record.attachments.length ? `Attachments: ${record.attachments.join(", ")}` : null,
+    record.sideshift ? "Includes sideshift" : null,
+    record.freeLift ? "Includes free lift" : null,
+    record.shortHighlights,
+    record.conditionNotes,
+  ]
+    .filter(Boolean)
+    .join(". ");
+
+  return `${record.title}${details ? ` - ${details}` : ""}${extras ? `. ${extras}` : ""}`;
 }
 
 function buildAgentContext(data: Base44WorkspaceData) {
@@ -574,6 +718,47 @@ export async function searchBase44Inventory(workspace: Workspace, query?: string
         ? forkliftRichSummary(item as Base44Forklift)
         : palletTruckLine(item as Base44PalletTruck),
     );
+}
+
+export async function findBase44ForkliftByReference(
+  workspace: Workspace,
+  input: {
+    listingId?: string | null;
+    title?: string | null;
+    query?: string | null;
+  },
+) {
+  if (!isBase44EnabledForWorkspace(workspace)) {
+    return null;
+  }
+
+  const data = await fetchBase44WorkspaceData();
+  const available = stockForklifts(data.forklifts);
+  const listingIdNeedle = normalizeReference(input.listingId);
+  const titleNeedle = normalizeReference(input.title);
+  const queryNeedle = normalizeReference(input.query);
+
+  const exactMatch = available.find((item) =>
+    forkliftReferenceFields(item)
+      .map(normalizeReference)
+      .some((field) =>
+        [listingIdNeedle, titleNeedle].filter(Boolean).some((needle) => field === needle),
+      ),
+  );
+
+  if (exactMatch) {
+    return mapForkliftRecord(exactMatch);
+  }
+
+  const fuzzyNeedles = [listingIdNeedle, titleNeedle, queryNeedle].filter(Boolean);
+  const fuzzyMatch = available.find((item) => {
+    const fields = forkliftReferenceFields(item)
+      .map(normalizeReference)
+      .filter(Boolean);
+    return fuzzyNeedles.some((needle) => fields.some((field) => field.includes(needle)));
+  });
+
+  return fuzzyMatch ? mapForkliftRecord(fuzzyMatch) : null;
 }
 
 export async function searchBase44Customers(workspace: Workspace, query: string) {

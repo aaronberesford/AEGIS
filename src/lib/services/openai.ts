@@ -29,9 +29,14 @@ type AgentDecision = {
 export type PhoneCallOutcome = {
   summary: string;
   intent: "buy" | "sell" | "support" | "unknown";
+  purchaseIntent: "ready_now" | "considering" | "not_buying" | "unknown";
   callerName?: string | null;
   company?: string | null;
   email?: string | null;
+  buyerType?: "business" | "personal" | "unknown";
+  selectedListingId?: string | null;
+  selectedTruckTitle?: string | null;
+  deliveryPostcode?: string | null;
   requestedCallback: boolean;
   callbackTiming?: string | null;
   purchaseCompleted: boolean;
@@ -40,6 +45,8 @@ export type PhoneCallOutcome = {
   requirementsSummary: string;
   nextAction: string;
   customerHistoryNote: string;
+  wantsPurchaseSummary: boolean;
+  wantsInvoiceLink: boolean;
 };
 
 export type WorkspaceIssue = {
@@ -340,6 +347,7 @@ export async function extractPhoneCallOutcome(input: {
     return {
       summary: `Phone call with ${input.phoneNumber}.`,
       intent: "unknown",
+      purchaseIntent: "unknown",
       requestedCallback: true,
       callbackTiming: "tomorrow morning",
       purchaseCompleted: false,
@@ -348,6 +356,8 @@ export async function extractPhoneCallOutcome(input: {
       requirementsSummary: "Manual review required.",
       nextAction: "Call back and review the enquiry.",
       customerHistoryNote: `Phone call captured for ${input.phoneNumber}. Follow-up required.`,
+      wantsPurchaseSummary: false,
+      wantsInvoiceLink: false,
     } satisfies PhoneCallOutcome;
   }
 
@@ -374,11 +384,17 @@ export async function extractPhoneCallOutcome(input: {
                   : "No previous customer context was found.",
                 "Return valid JSON only.",
                 "Infer whether this was a buy enquiry, sell enquiry, support call, or unknown.",
+                "If the caller wants to move forward with a specific truck now, set purchaseIntent to ready_now even if payment was not taken on the call.",
+                "If they are interested but not ready to commit, use considering.",
+                "If they decline or only wanted information, use not_buying.",
+                "For buy-now calls, capture the selected listing ID or truck title if clearly stated, whether this is a business or personal purchase, and the delivery postcode if mentioned.",
                 "If no purchase happened, set requestedCallback true when a callback or follow-up is clearly needed.",
                 "If the caller is new or there is a commercial opportunity, set shouldCreateLead true.",
                 "leadStatus should be a short CRM status such as Phone enquiry, Buying enquiry, Selling enquiry, Qualified, Follow-up required, or Won.",
                 "customerHistoryNote should be one short paragraph suitable to append to a customer notes field.",
-                "JSON schema: { summary: string, intent: 'buy'|'sell'|'support'|'unknown', callerName?: string|null, company?: string|null, email?: string|null, requestedCallback: boolean, callbackTiming?: string|null, purchaseCompleted: boolean, shouldCreateLead: boolean, leadStatus: string, requirementsSummary: string, nextAction: string, customerHistoryNote: string }",
+                "Set wantsPurchaseSummary true when AEGIS should draft a follow-up email or SMS with the truck reference and call summary.",
+                "Set wantsInvoiceLink true when the caller is clearly ready to buy and expects invoice or payment details next.",
+                "JSON schema: { summary: string, intent: 'buy'|'sell'|'support'|'unknown', purchaseIntent: 'ready_now'|'considering'|'not_buying'|'unknown', callerName?: string|null, company?: string|null, email?: string|null, buyerType?: 'business'|'personal'|'unknown', selectedListingId?: string|null, selectedTruckTitle?: string|null, deliveryPostcode?: string|null, requestedCallback: boolean, callbackTiming?: string|null, purchaseCompleted: boolean, shouldCreateLead: boolean, leadStatus: string, requirementsSummary: string, nextAction: string, customerHistoryNote: string, wantsPurchaseSummary: boolean, wantsInvoiceLink: boolean }",
               ]
                 .filter(Boolean)
                 .join(" "),
@@ -410,7 +426,13 @@ export async function extractPhoneCallOutcome(input: {
   }>(response);
   const parsed = safeJsonParse<PhoneCallOutcome>(extractResponseText(payload));
 
-  if (!parsed?.summary || !parsed.intent || !parsed.leadStatus || !parsed.nextAction) {
+  if (
+    !parsed?.summary ||
+    !parsed.intent ||
+    !parsed.purchaseIntent ||
+    !parsed.leadStatus ||
+    !parsed.nextAction
+  ) {
     throw new AppError("OpenAI returned an unreadable phone call outcome.", {
       code: "OPENAI_BAD_PHONE_CALL_PAYLOAD",
       status: 502,

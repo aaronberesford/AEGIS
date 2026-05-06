@@ -196,6 +196,8 @@ function buildInstructions(
     "The caller is talking to a forklift dealership and remarketing desk.",
     "Start by finding out whether they want to buy a forklift or sell one.",
     "If buying, ask for power type, lift capacity, lift height, budget, timing and location, then recommend matching stock only from this inventory.",
+    "If the caller wants to buy a truck now, confirm the exact truck or listing ID, the quoted price, whether it is a business or personal purchase, their full name, company, phone, email and delivery postcode.",
+    "For a buy-now caller, tell them you will send the listing link and purchase summary, and that the team can send the invoice or payment link next.",
     "If selling, ask for make, model, year, fuel, lift capacity, mast height, hours, condition, asking price and location.",
     "Always work out whether the caller is already known or a new contact.",
     "For new callers, collect full name, company and email before ending the call.",
@@ -216,7 +218,7 @@ function initialPrompt(workspaceName, outboundContext = "") {
     return `Open the call for ${workspaceName}. Mention this context briefly: ${outboundContext}. Then ask whether they want to buy or sell a forklift today.`;
   }
 
-  return `Greet the caller for ${workspaceName} and ask whether they want to buy a forklift or sell one today.`;
+  return `Greet the caller for ${workspaceName} and ask whether they want to buy a forklift or sell one today. If they want to buy immediately, gather the truck reference and buyer details before ending the call.`;
 }
 
 function collectText(value) {
