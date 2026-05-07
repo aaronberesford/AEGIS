@@ -16,6 +16,11 @@ const BASE44_API_KEY = process.env.BASE44_API_KEY ?? "";
 const BASE44_CACHE_MS = 2 * 60 * 1000;
 const AEGIS_SYNC_URL = process.env.AEGIS_SYNC_URL ?? "";
 const AEGIS_PHONE_SYNC_SECRET = process.env.AEGIS_PHONE_SYNC_SECRET ?? "";
+const RELEASE_VERSION =
+  process.env.AEGIS_RELEASE_VERSION ??
+  process.env.RENDER_GIT_COMMIT ??
+  process.env.VERCEL_GIT_COMMIT_SHA ??
+  "local-dev";
 
 if (!OPENAI_API_KEY) {
   console.error("Missing OPENAI_API_KEY for Twilio realtime bridge.");
@@ -263,7 +268,13 @@ async function syncCallOutcome(input) {
 const server = http.createServer((req, res) => {
   if (req.url === "/" || req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, service: "twilio-realtime-bridge" }));
+    res.end(
+      JSON.stringify({
+        ok: true,
+        service: "twilio-realtime-bridge",
+        releaseVersion: RELEASE_VERSION,
+      }),
+    );
     return;
   }
 

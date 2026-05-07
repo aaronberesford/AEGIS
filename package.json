@@ -7,6 +7,7 @@
     "dev:voice": "node scripts/dev-voice.mjs",
     "voice:bridge": "node --env-file=.env.local server/twilio-realtime-bridge.mjs",
     "voice:bridge:prod": "node server/twilio-realtime-bridge.mjs",
+    "verify:production": "powershell -ExecutionPolicy Bypass -File scripts/verify-production.ps1",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

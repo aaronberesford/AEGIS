@@ -29,6 +29,7 @@ function xmlResponse(twiml: InstanceType<typeof VoiceResponse>) {
   return new Response(twiml.toString(), {
     headers: {
       "Content-Type": "text/xml",
+      "X-AEGIS-Release": env().releaseVersion,
     },
   });
 }
@@ -72,6 +73,7 @@ function realtimeStreamResponse(input: {
     {
       headers: {
         "Content-Type": "text/xml",
+        "X-AEGIS-Release": env().releaseVersion,
       },
     },
   );

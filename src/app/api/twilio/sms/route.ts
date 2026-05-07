@@ -1,3 +1,4 @@
+import { env } from "@/lib/env";
 import { findWorkspaceByTwilioNumber, logSmsActivity } from "@/lib/repository";
 
 function escapeXml(value: string) {
@@ -42,6 +43,7 @@ export async function POST(request: Request) {
     {
       headers: {
         "Content-Type": "text/xml",
+        "X-AEGIS-Release": env().releaseVersion,
       },
     },
   );

@@ -80,6 +80,7 @@ Deploy this Next.js app to Vercel from GitHub.
 Set these environment variables in Vercel:
 
 - `DEMO_MODE=false`
+- `AEGIS_RELEASE_VERSION=$VERCEL_GIT_COMMIT_SHA` if you want an explicit shared release marker in logs and health checks
 - `NEXT_PUBLIC_APP_URL=https://aegis.yourdomain.com`
 - `OPENAI_API_KEY=...`
 - `OPENAI_MODEL=gpt-5-mini`
@@ -111,6 +112,7 @@ Render service details:
 
 Set these environment variables in Render:
 
+- `AEGIS_RELEASE_VERSION=$RENDER_GIT_COMMIT` if you want an explicit shared release marker in logs and health checks
 - `OPENAI_API_KEY=...`
 - `OPENAI_REALTIME_MODEL=gpt-realtime-1.5`
 - `OPENAI_REALTIME_VOICE=cedar`
@@ -164,10 +166,30 @@ When you are ready to persist real data:
    [20260504190000_phase3_persistence.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504190000_phase3_persistence.sql)
    [20260504203000_phase4_crm.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504203000_phase4_crm.sql)
    [20260504220000_phase5_automations.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260504220000_phase5_automations.sql)
+   [20260505225000_phase6_background_jobs.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/migrations/20260505225000_phase6_background_jobs.sql)
 5. Run [supabase/seed.sql](C:/Users/aaron/Desktop/A.E.G.I.S/aegis-app/supabase/seed.sql)
 6. Restart the app
 
 If Supabase is not configured while `DEMO_MODE=false`, the server returns a clear configuration error instead of falling back silently.
+
+## Safe deploy checklist
+
+Use this order whenever voice, SMS, CRM sync, or background jobs change:
+
+1. Apply any new Supabase migrations before or alongside code deployment.
+2. Deploy Vercel and Render from matching `main` commits when phone logic changes.
+3. Run the production verification script:
+
+```bash
+npm run verify:production
+```
+
+4. Confirm these endpoints are healthy:
+   - `POST /api/twilio/voice-script`
+   - `POST /api/twilio/sms`
+   - `GET /api/health/ops`
+   - `GET https://aegis-voice-bridge.onrender.com/health`
+5. Compare `releaseVersion` across Vercel and Render. If they differ, redeploy the older side before testing customer calls.
 
 ## Live integrations
 

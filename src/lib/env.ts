@@ -5,6 +5,11 @@ export function env() {
   const defaultMediaStreamUrl = appUrl.startsWith("https://")
     ? `${appUrl.replace("https://", "wss://")}/media-stream`
     : `${appUrl.replace("http://", "ws://")}/media-stream`;
+  const releaseVersion =
+    process.env.AEGIS_RELEASE_VERSION ??
+    process.env.VERCEL_GIT_COMMIT_SHA ??
+    process.env.RENDER_GIT_COMMIT ??
+    "local-dev";
 
   return {
     demoMode: process.env.DEMO_MODE !== "false",
@@ -27,6 +32,7 @@ export function env() {
     base44WorkspaceId: process.env.BASE44_WORKSPACE_ID ?? "",
     forkliftWebsiteBaseUrl: process.env.FORKLIFT_WEBSITE_BASE_URL ?? "",
     aegisPhoneSyncSecret: process.env.AEGIS_PHONE_SYNC_SECRET ?? "",
+    releaseVersion,
     appUrl,
   };
 }
