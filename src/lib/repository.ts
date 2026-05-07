@@ -907,6 +907,26 @@ export async function findWorkspaceByTwilioNumber(phoneNumber: string) {
         return configuredWorkspace;
       }
     }
+
+    const forkliftWorkspace = snapshot.workspaces.find((workspace) => {
+      const haystack = [
+        workspace.name,
+        workspace.industry,
+        ...(workspace.services ?? []),
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes("forklift") || haystack.includes("material handling");
+    });
+
+    if (forkliftWorkspace) {
+      return forkliftWorkspace;
+    }
+
+    if (snapshot.workspaces.length === 1) {
+      return snapshot.workspaces[0];
+    }
   }
 
   return (
