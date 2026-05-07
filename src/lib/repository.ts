@@ -164,6 +164,14 @@ function mapIntegration(row: Record<string, unknown>): IntegrationSetting {
   };
 }
 
+function isMissingOptionalTableError(error: { message?: string } | null | undefined) {
+  const message = String(error?.message ?? "").toLowerCase();
+  return (
+    message.includes("could not find the table") ||
+    message.includes("relation") && message.includes("does not exist")
+  );
+}
+
 function mapSuggestion(row: Record<string, unknown>): Suggestion {
   return {
     id: String(row.id),
@@ -528,7 +536,7 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
       .limit(20),
   ]);
 
-  const errors = [
+  const requiredErrors = [
     userResponse.error,
     workspaceResponse.error,
     approvalResponse.error,
@@ -546,14 +554,46 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     notesResponse.error,
     smsResponse.error,
     callResponse.error,
-    suggestionResponse.error,
-    notificationResponse.error,
-    summaryResponse.error,
   ].filter(Boolean);
 
-  if (errors.length > 0) {
+  if (requiredErrors.length > 0) {
     throw new AppError(
-      `Supabase query failed: ${errors[0]?.message ?? "Unknown database error."}`,
+      `Supabase query failed: ${requiredErrors[0]?.message ?? "Unknown database error."}`,
+      {
+        code: "SUPABASE_QUERY_FAILED",
+        status: 500,
+      },
+    );
+  }
+
+  const suggestionRows =
+    suggestionResponse.error && isMissingOptionalTableError(suggestionResponse.error)
+      ? []
+      : (suggestionResponse.data ?? []);
+  const notificationRows =
+    notificationResponse.error && isMissingOptionalTableError(notificationResponse.error)
+      ? []
+      : (notificationResponse.data ?? []);
+  const summaryRows =
+    summaryResponse.error && isMissingOptionalTableError(summaryResponse.error)
+      ? []
+      : (summaryResponse.data ?? []);
+
+  const optionalErrors = [
+    suggestionResponse.error && !isMissingOptionalTableError(suggestionResponse.error)
+      ? suggestionResponse.error
+      : null,
+    notificationResponse.error && !isMissingOptionalTableError(notificationResponse.error)
+      ? notificationResponse.error
+      : null,
+    summaryResponse.error && !isMissingOptionalTableError(summaryResponse.error)
+      ? summaryResponse.error
+      : null,
+  ].filter(Boolean);
+
+  if (optionalErrors.length > 0) {
+    throw new AppError(
+      `Supabase query failed: ${optionalErrors[0]?.message ?? "Unknown database error."}`,
       {
         code: "SUPABASE_QUERY_FAILED",
         status: 500,
@@ -754,13 +794,13 @@ async function requireSupabaseSnapshot(currentWorkspaceId?: string): Promise<Sna
     auditLogs,
   });
   const callLogs = ((callResponse.data ?? []) as Array<Record<string, unknown>>).map(mapCallLog);
-  const suggestions = (suggestionResponse.data ?? []).map((row) =>
+  const suggestions = suggestionRows.map((row) =>
     mapSuggestion(row as Record<string, unknown>),
   );
-  const notifications = (notificationResponse.data ?? []).map((row) =>
+  const notifications = notificationRows.map((row) =>
     mapNotification(row as Record<string, unknown>),
   );
-  const workspaceSummaries = (summaryResponse.data ?? []).map((row) =>
+  const workspaceSummaries = summaryRows.map((row) =>
     mapWorkspaceSummary(row as Record<string, unknown>),
   );
   const userRow = (userResponse.data ?? [])[0] as Record<string, unknown> | undefined;
