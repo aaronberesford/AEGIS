@@ -10,6 +10,7 @@ import {
   workspaceById,
 } from "@/lib/repository";
 import { AppError } from "@/lib/errors";
+import { sendWorkspaceEmail } from "@/lib/services/email";
 import { placeTwilioCall, sendTwilioSms } from "@/lib/services/twilio";
 import { buildVoiceWebhookUrl } from "@/lib/voice-sales-agent";
 
@@ -164,6 +165,67 @@ export async function executeApproval(approvalId: string) {
       await markApprovalError(
         approvalId,
         error instanceof Error ? error.message : "Call execution failed.",
+      );
+      throw error;
+    }
+  }
+
+  if (approval.type === "send_email") {
+    const email = approval.metadata?.email || approval.recipient;
+    try {
+      if (!email) {
+        throw new AppError("Email approval is missing a destination email address.", {
+          code: "EMAIL_MISSING_RECIPIENT",
+          status: 400,
+        });
+      }
+
+      const subject = approval.metadata?.subject || approval.title;
+      const result = await sendWorkspaceEmail({
+        to: email,
+        subject,
+        text: approval.message,
+        html: approval.metadata?.html || undefined,
+        attachments:
+          approval.metadata?.attachmentFilename && approval.metadata?.attachmentContent
+            ? [
+                {
+                  filename: approval.metadata.attachmentFilename,
+                  content: approval.metadata.attachmentContent,
+                  contentType: approval.metadata.attachmentContentType || "text/plain",
+                },
+              ]
+            : undefined,
+      });
+      await addToolCall({
+        workspaceId: approval.workspaceId,
+        tool: "send_email",
+        status: "success",
+        input: JSON.stringify({
+          recipient: approval.recipient,
+          to: email,
+          subject,
+        }),
+        output: JSON.stringify(result),
+      });
+      await resolveApproval(approvalId, "approved");
+      return { approval, execution: result };
+    } catch (error) {
+      await addToolCall({
+        workspaceId: approval.workspaceId,
+        tool: "send_email",
+        status: "error",
+        input: JSON.stringify({
+          recipient: approval.recipient,
+          to: email,
+          subject: approval.metadata?.subject || approval.title,
+        }),
+        output: "",
+        error: error instanceof Error ? error.message : "Email execution failed.",
+      });
+      await markApprovalError(
+        approvalId,
+        error instanceof Error ? error.message : "Email execution failed.",
       );
       throw error;
     }

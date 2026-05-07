@@ -4,6 +4,7 @@ import { env } from "@/lib/env";
 import { AppError, toErrorResponse } from "@/lib/errors";
 import {
   addAuditLog,
+  addToolCall,
   addCrmNote,
   createGeneratedApproval,
   createLeadRecord,
@@ -26,6 +27,11 @@ import {
   upsertBase44SaleRecord,
   upsertBase44CustomerFromCall,
 } from "@/lib/services/base44";
+import {
+  buildPurchaseInvoiceEmail,
+  canSendWorkspaceEmail,
+  sendWorkspaceEmail,
+} from "@/lib/services/email";
 import { extractPhoneCallOutcome } from "@/lib/services/openai";
 
 type VoiceSyncPayload = {
@@ -378,7 +384,6 @@ export async function POST(request: Request) {
       ]
         .filter(Boolean)
         .join(" ");
-
       if (matchedForklift && needsPaymentFollowUp) {
         await reserveBase44ForkliftForBuyer(workspace, {
           forkliftId: matchedForklift.id,
@@ -409,6 +414,20 @@ export async function POST(request: Request) {
               ].join(" "),
             })
           : null;
+      const invoiceEmailPack = buildPurchaseInvoiceEmail({
+        customerName: lead.name,
+        truckName,
+        listingId: matchedForklift?.listingId ?? outcome.selectedListingId ?? null,
+        priceDisplay: priceLabel,
+        buyerType: buyerTypeLabel,
+        deliveryPostcode,
+        truckLink,
+        invoiceNumber: invoiceRecord?.invoice_number ?? null,
+        invoiceStatus: invoiceRecord?.status ?? null,
+        dueDate: invoiceRecord?.due_date ?? null,
+        summary: outcome.summary,
+      });
+      const emailSubject = `Forklift Pro purchase summary: ${truckName}`;
 
       if (outcome.purchaseCompleted && matchedForklift) {
         await markBase44ForkliftSold(workspace, {
@@ -459,7 +478,59 @@ export async function POST(request: Request) {
         }
       }
 
-      if (leadEmail && shouldSendPurchaseSummary && needsPaymentFollowUp) {
+      const shouldSendTransactionalEmail =
+        leadEmail &&
+        needsPaymentFollowUp &&
+        (shouldSendPurchaseSummary || shouldSendInvoiceLink);
+
+      let emailSentDirectly = false;
+      if (shouldSendTransactionalEmail && canSendWorkspaceEmail()) {
+        try {
+          await sendWorkspaceEmail({
+            to: leadEmail,
+            subject: emailSubject,
+            text: invoiceEmailPack.text,
+            html: invoiceEmailPack.html,
+            attachments: [
+              {
+                filename: `invoice-${matchedForklift?.listingId ?? "purchase-summary"}.txt`,
+                content: invoiceEmailPack.attachment,
+                contentType: "text/plain",
+              },
+            ],
+          });
+          emailSentDirectly = true;
+          await addToolCall({
+            workspaceId: body.workspaceId,
+            tool: "send_email",
+            status: "success",
+            input: JSON.stringify({
+              to: leadEmail,
+              subject: emailSubject,
+              category: "phone_purchase_invoice",
+            }),
+            output: JSON.stringify({
+              invoiceId: invoiceRecord?.id ?? null,
+              listingId: matchedForklift?.listingId ?? outcome.selectedListingId ?? null,
+            }),
+          });
+        } catch (error) {
+          await addToolCall({
+            workspaceId: body.workspaceId,
+            tool: "send_email",
+            status: "error",
+            input: JSON.stringify({
+              to: leadEmail,
+              subject: emailSubject,
+              category: "phone_purchase_invoice",
+            }),
+            output: "",
+            error: error instanceof Error ? error.message : "Direct email send failed.",
+          });
+        }
+      }
+
+      if (!emailSentDirectly && leadEmail && shouldSendPurchaseSummary && needsPaymentFollowUp) {
         await previewAgentAction({
           message: "",
           actionCards: [],
@@ -472,6 +543,11 @@ export async function POST(request: Request) {
             "high",
             "send_email",
             {
+              subject: emailSubject,
+              html: invoiceEmailPack.html,
+              attachmentFilename: `invoice-${matchedForklift?.listingId ?? "purchase-summary"}.txt`,
+              attachmentContent: invoiceEmailPack.attachment,
+              attachmentContentType: "text/plain",
               leadId: lead.id,
               email: leadEmail,
               listingId:
@@ -485,7 +561,7 @@ export async function POST(request: Request) {
         });
       }
 
-      if (leadEmail && shouldSendInvoiceLink && needsPaymentFollowUp) {
+      if (!emailSentDirectly && leadEmail && shouldSendInvoiceLink && needsPaymentFollowUp) {
         await previewAgentAction({
           message: "",
           actionCards: [],
@@ -498,6 +574,11 @@ export async function POST(request: Request) {
             "high",
             "send_email",
             {
+              subject: emailSubject,
+              html: invoiceEmailPack.html,
+              attachmentFilename: `invoice-${matchedForklift?.listingId ?? "purchase-summary"}.txt`,
+              attachmentContent: invoiceEmailPack.attachment,
+              attachmentContentType: "text/plain",
               leadId: lead.id,
               email: leadEmail,
               listingId:
