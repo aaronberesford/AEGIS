@@ -9,6 +9,8 @@ import {
   createGeneratedApproval,
   createLeadRecord,
   findLeadByPhone,
+  findWorkspaceByTwilioNumber,
+  listActiveWorkspaces,
   logCallActivity,
   previewAgentAction,
   scheduleLeadFollowUp,
@@ -182,24 +184,63 @@ function buildTruckLinkLabel(link: string | null, listingId: string | null) {
   return "Truck link to be confirmed by the sales team.";
 }
 
+async function resolveVoiceSyncWorkspace(workspaceId?: string) {
+  if (workspaceId?.trim()) {
+    const direct = await workspaceById(workspaceId);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  if (env().base44WorkspaceId) {
+    const configured = await workspaceById(env().base44WorkspaceId);
+    if (configured) {
+      return configured;
+    }
+  }
+
+  if (env().twilioPhoneNumber) {
+    const viaTwilio = await findWorkspaceByTwilioNumber(env().twilioPhoneNumber);
+    if (viaTwilio) {
+      return viaTwilio;
+    }
+  }
+
+  const workspaces = await listActiveWorkspaces();
+  const forkliftWorkspace = workspaces.find((entry) => {
+    const haystack = [entry.name, entry.industry, ...(entry.services ?? [])]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes("forklift") || haystack.includes("material handling");
+  });
+
+  if (forkliftWorkspace) {
+    return forkliftWorkspace;
+  }
+
+  return workspaces.length === 1 ? workspaces[0] : null;
+}
+
 export async function POST(request: Request) {
   try {
     requireVoiceSyncAuth(request);
 
     const body = (await request.json()) as VoiceSyncPayload;
-    if (!body.workspaceId || !body.phoneNumber || !body.transcript?.trim()) {
+    if (!body.phoneNumber || !body.transcript?.trim()) {
       return NextResponse.json(
-        { error: "workspaceId, phoneNumber and transcript are required" },
+        { error: "phoneNumber and transcript are required" },
         { status: 400 },
       );
     }
 
-    const workspace = await workspaceById(body.workspaceId);
+    const workspace = await resolveVoiceSyncWorkspace(body.workspaceId);
     if (!workspace) {
       return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
     }
 
-    const existingLead = await findLeadByPhone(body.workspaceId, body.phoneNumber);
+    const resolvedWorkspaceId = workspace.id;
+
+    const existingLead = await findLeadByPhone(resolvedWorkspaceId, body.phoneNumber);
     const base44Customer = await findBase44CustomerByPhone(workspace, body.phoneNumber);
     const customerContext = buildCustomerContext({
       customer: base44Customer,
@@ -269,7 +310,7 @@ export async function POST(request: Request) {
     let lead = existingLead;
     if (!lead && (outcome.shouldCreateLead || needsGeneralFollowUp || needsPaymentFollowUp)) {
       lead = await createLeadRecord({
-        workspaceId: body.workspaceId,
+        workspaceId: resolvedWorkspaceId,
         name: leadName,
         phone: body.phoneNumber,
         email: leadEmail,
@@ -286,7 +327,7 @@ export async function POST(request: Request) {
       });
     } else if (lead) {
       await updateLeadStatus({
-        workspaceId: body.workspaceId,
+        workspaceId: resolvedWorkspaceId,
         leadId: lead.id,
         status: resolvedLeadStatus,
         nextFollowUpAt:
@@ -301,7 +342,7 @@ export async function POST(request: Request) {
         ? `Truck: ${buildBase44ForkliftCustomerSummary(matchedForklift)}`
         : null;
       await addCrmNote({
-        workspaceId: body.workspaceId,
+        workspaceId: resolvedWorkspaceId,
         leadId: lead.id,
         content: [
           outcome.summary,
@@ -319,7 +360,7 @@ export async function POST(request: Request) {
 
     if (lead && needsGeneralFollowUp) {
       await scheduleLeadFollowUp({
-        workspaceId: body.workspaceId,
+        workspaceId: resolvedWorkspaceId,
         leadId: lead.id,
         title: `Call back ${lead.name}`,
         description: outcome.nextAction,
@@ -501,7 +542,7 @@ export async function POST(request: Request) {
           });
           emailSentDirectly = true;
           await addToolCall({
-            workspaceId: body.workspaceId,
+            workspaceId: resolvedWorkspaceId,
             tool: "send_email",
             status: "success",
             input: JSON.stringify({
@@ -516,7 +557,7 @@ export async function POST(request: Request) {
           });
         } catch (error) {
           await addToolCall({
-            workspaceId: body.workspaceId,
+            workspaceId: resolvedWorkspaceId,
             tool: "send_email",
             status: "error",
             input: JSON.stringify({
@@ -535,7 +576,7 @@ export async function POST(request: Request) {
           message: "",
           actionCards: [],
           pendingApproval: createGeneratedApproval(
-            body.workspaceId,
+            resolvedWorkspaceId,
             `Send purchase summary to ${lead.name}`,
             leadEmail,
             purchaseSummaryBody,
@@ -566,7 +607,7 @@ export async function POST(request: Request) {
           message: "",
           actionCards: [],
           pendingApproval: createGeneratedApproval(
-            body.workspaceId,
+            resolvedWorkspaceId,
             `Send invoice and payment link to ${lead.name}`,
             leadEmail,
             invoiceFollowUpBody,
@@ -597,7 +638,7 @@ export async function POST(request: Request) {
           message: "",
           actionCards: [],
           pendingApproval: createGeneratedApproval(
-            body.workspaceId,
+            resolvedWorkspaceId,
             `Text truck details to ${lead.name}`,
             lead.name,
             smsBody,
@@ -620,7 +661,7 @@ export async function POST(request: Request) {
 
       if (needsPaymentFollowUp) {
         await scheduleLeadFollowUp({
-          workspaceId: body.workspaceId,
+          workspaceId: resolvedWorkspaceId,
           leadId: lead.id,
           title: `Check payment status for ${lead.name}`,
           description:
@@ -632,7 +673,7 @@ export async function POST(request: Request) {
     }
 
     await logCallActivity({
-      workspaceId: body.workspaceId,
+      workspaceId: resolvedWorkspaceId,
       leadId: lead?.id,
       direction: body.direction ?? "inbound",
       status: outcome.purchaseCompleted ? "completed" : "follow_up_required",
@@ -643,7 +684,7 @@ export async function POST(request: Request) {
     });
 
     await addAuditLog({
-      workspaceId: body.workspaceId,
+      workspaceId: resolvedWorkspaceId,
       userId: "user_alex",
       action: "voice_call_sync",
       input: body.phoneNumber,
@@ -662,6 +703,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
+      workspaceId: resolvedWorkspaceId,
       outcome,
       customerId: syncedCustomer?.id ?? null,
       leadId: lead?.id ?? null,

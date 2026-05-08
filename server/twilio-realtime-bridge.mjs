@@ -309,6 +309,10 @@ wss.on("connection", (twilioWs) => {
   let inventoryText = defaultInventory();
   let customer = null;
   let syncSubmitted = false;
+  let finalizingSync = null;
+  let pendingSummaryResolve = null;
+  let pendingSummaryTimeout = null;
+  let summaryFragments = [];
   const transcriptTurns = [];
   let callInfo = {
     workspaceName: "Forklift Pro Solutions",
@@ -361,7 +365,11 @@ wss.on("connection", (twilioWs) => {
   };
 
   const submitSync = async () => {
-    if (syncSubmitted || !callInfo.workspaceId) {
+    const transcript = transcriptTurns
+      .map((turn) => `${turn.speaker === "caller" ? "Caller" : "AEGIS"}: ${turn.text}`)
+      .join("\n");
+
+    if (syncSubmitted || !callInfo.workspaceId || !transcript.trim()) {
       return;
     }
 
@@ -371,11 +379,91 @@ wss.on("connection", (twilioWs) => {
       callSid: callInfo.callSid || undefined,
       phoneNumber: callInfo.contactPhone || undefined,
       direction: callInfo.mode === "outbound" ? "outbound" : "inbound",
-      transcript: transcriptTurns
-        .map((turn) => `${turn.speaker === "caller" ? "Caller" : "AEGIS"}: ${turn.text}`)
-        .join("\n"),
+      transcript,
       knownCustomerId: customer?.id ?? null,
     });
+  };
+
+  const resolvePendingSummary = (value) => {
+    if (!pendingSummaryResolve) {
+      return false;
+    }
+
+    const resolver = pendingSummaryResolve;
+    pendingSummaryResolve = null;
+    if (pendingSummaryTimeout) {
+      clearTimeout(pendingSummaryTimeout);
+      pendingSummaryTimeout = null;
+    }
+    const cleaned = collectText(value);
+    resolver(cleaned);
+    return true;
+  };
+
+  const collectResponseText = (response) => {
+    const outputs = response?.output ?? [];
+    const fragments = [];
+
+    for (const item of outputs) {
+      const content = item?.content ?? [];
+      for (const part of content) {
+        if (part?.transcript) {
+          fragments.push(part.transcript);
+        } else if (part?.text) {
+          fragments.push(part.text);
+        }
+      }
+    }
+
+    return collectText(fragments.join(" "));
+  };
+
+  const requestCallSummary = async () => {
+    if (openAiWs.readyState !== WebSocket.OPEN) {
+      return "";
+    }
+
+    return new Promise((resolve) => {
+      pendingSummaryResolve = resolve;
+      summaryFragments = [];
+      pendingSummaryTimeout = setTimeout(() => {
+        resolvePendingSummary(summaryFragments.join(" "));
+      }, 3500);
+
+      sendOpenAi({
+        type: "response.create",
+        response: {
+          output_modalities: ["text"],
+          instructions:
+            "Summarise the completed phone call in one short factual paragraph. Include whether the caller wanted to buy or sell, the chosen truck or listing if mentioned, the caller name, company, email, delivery postcode, quoted price, callback or payment status, and the next agreed action. If a detail was not provided, say not provided.",
+        },
+      });
+    });
+  };
+
+  const finalizeSync = async () => {
+    if (finalizingSync) {
+      return finalizingSync;
+    }
+
+    finalizingSync = (async () => {
+      if (transcriptTurns.length < 2) {
+        const summary = await requestCallSummary();
+        if (summary) {
+          pushTranscriptTurn(transcriptTurns, "assistant", `Call summary: ${summary}`);
+        }
+      }
+
+      await submitSync();
+    })()
+      .catch((error) => {
+        console.error("Finalize sync failed:", error);
+      })
+      .finally(() => {
+        finalizingSync = null;
+      });
+
+    return finalizingSync;
   };
 
   const maybeStartGreeting = () => {
@@ -436,16 +524,28 @@ wss.on("connection", (twilioWs) => {
       }
 
       if (event.type === "response.audio_transcript.done") {
+        if (pendingSummaryResolve) {
+          summaryFragments.push(event.transcript);
+          return;
+        }
         pushTranscriptTurn(transcriptTurns, "assistant", event.transcript);
         return;
       }
 
       if (event.type === "response.output_text.done") {
+        if (pendingSummaryResolve) {
+          summaryFragments.push(event.text);
+          return;
+        }
         pushTranscriptTurn(transcriptTurns, "assistant", event.text);
         return;
       }
 
       if (event.type === "response.done") {
+        if (pendingSummaryResolve) {
+          resolvePendingSummary(collectResponseText(event.response) || summaryFragments.join(" "));
+          return;
+        }
         const outputs = event.response?.output ?? [];
         for (const item of outputs) {
           const content = item?.content ?? [];
@@ -530,7 +630,7 @@ wss.on("connection", (twilioWs) => {
           break;
 
         case "stop":
-          await submitSync();
+          await finalizeSync();
           if (openAiWs.readyState === WebSocket.OPEN) {
             openAiWs.close();
           }
@@ -545,10 +645,11 @@ wss.on("connection", (twilioWs) => {
   });
 
   twilioWs.on("close", () => {
-    void submitSync();
-    if (openAiWs.readyState === WebSocket.OPEN) {
-      openAiWs.close();
-    }
+    void finalizeSync().finally(() => {
+      if (openAiWs.readyState === WebSocket.OPEN) {
+        openAiWs.close();
+      }
+    });
   });
 
   twilioWs.on("error", (error) => {
