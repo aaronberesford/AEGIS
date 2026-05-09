@@ -520,9 +520,10 @@ export async function POST(request: Request) {
       }
 
       const shouldSendTransactionalEmail =
-        leadEmail &&
-        needsPaymentFollowUp &&
-        (shouldSendPurchaseSummary || shouldSendInvoiceLink);
+        Boolean(leadEmail) &&
+        (shouldSendPurchaseSummary || shouldSendInvoiceLink) &&
+        (outcome.intent === "buy" || needsPaymentFollowUp || outcome.purchaseCompleted) &&
+        Boolean(matchedForklift || outcome.selectedTruckTitle);
 
       let emailSentDirectly = false;
       if (shouldSendTransactionalEmail && canSendWorkspaceEmail()) {
@@ -571,7 +572,7 @@ export async function POST(request: Request) {
         }
       }
 
-      if (!emailSentDirectly && leadEmail && shouldSendPurchaseSummary && needsPaymentFollowUp) {
+      if (!emailSentDirectly && leadEmail && shouldSendPurchaseSummary) {
         await previewAgentAction({
           message: "",
           actionCards: [],
@@ -602,7 +603,7 @@ export async function POST(request: Request) {
         });
       }
 
-      if (!emailSentDirectly && leadEmail && shouldSendInvoiceLink && needsPaymentFollowUp) {
+      if (!emailSentDirectly && leadEmail && shouldSendInvoiceLink) {
         await previewAgentAction({
           message: "",
           actionCards: [],
@@ -633,7 +634,7 @@ export async function POST(request: Request) {
         });
       }
 
-      if (shouldSendPurchaseSummary && needsPaymentFollowUp) {
+      if (shouldSendPurchaseSummary) {
         await previewAgentAction({
           message: "",
           actionCards: [],
@@ -668,6 +669,29 @@ export async function POST(request: Request) {
             outcome.nextAction ||
             `Follow up ${lead.name} if payment has not been received for ${truckName}.`,
           dueAt: resolveFollowUpDate(outcome.callbackTiming),
+        });
+      }
+
+      if (!emailSentDirectly) {
+        await addAuditLog({
+          workspaceId: resolvedWorkspaceId,
+          userId: "user_alex",
+          action: "voice_email_follow_up_state",
+          input: body.phoneNumber,
+          output: JSON.stringify({
+            leadEmail,
+            shouldSendPurchaseSummary,
+            shouldSendInvoiceLink,
+            shouldSendTransactionalEmail,
+            needsPaymentFollowUp,
+            purchaseCompleted: outcome.purchaseCompleted,
+            purchaseIntent: outcome.purchaseIntent,
+            intent: outcome.intent,
+            matchedForkliftId: matchedForklift?.id ?? null,
+            selectedListingId: outcome.selectedListingId ?? null,
+            selectedTruckTitle: outcome.selectedTruckTitle ?? null,
+          }),
+          approvalStatus: "not_required",
         });
       }
     }
